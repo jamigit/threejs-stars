@@ -17,11 +17,21 @@
   let modeDisplay = 'standard';
   
   // Performance optimization variables
-  let activeClusters = []; // Only 3-4 clusters active at once (reduced for better performance)
-  let maxActiveClusters = 4;
+  let activeClusters = []; // Only 8-10 clusters active at once (increased for higher density)
+  let maxActiveClusters = 10;
   let currentClusterIndex = 0; // Index of cluster sphere is currently interacting with
   let clusterPool = []; // Pool of pre-created cluster data
   let frameCount = 0;
+  
+  // Particle tail system
+  let tailParticles = [];
+  let maxTailParticles = 100; // Increased from 50
+  let tailParticleGeometry = new THREE.SphereGeometry(0.08, 8, 8); // Increased size from 0.05
+  let tailParticleMaterial = new THREE.MeshBasicMaterial({ 
+      color: 0x00ffff,
+      transparent: true,
+    opacity: 1.0 // Increased from 0.8
+  });
   
   // Additional performance optimizations
   let totalPathLength = 0; // Cache path length calculation
@@ -40,72 +50,121 @@
   let adaptiveQuality = 1.0; // Quality multiplier
   let lastFrameTime = 0;
 
+  // Function to update particle tail
+  function updateTailParticles() {
+    // Add new particle at sphere position (every frame for stronger tail)
+    const particle = new THREE.Mesh(tailParticleGeometry, tailParticleMaterial.clone());
+    particle.position.copy(sphere.position);
+    particle.userData = {
+      life: 1.0, // Full opacity initially
+      maxLife: 1.0,
+      velocity: new THREE.Vector3(
+        (Math.random() - 0.5) * 0.05, // Reduced random velocity
+        (Math.random() - 0.5) * 0.05,
+        (Math.random() - 0.5) * 0.05
+      )
+    };
+    
+    scene.add(particle);
+    tailParticles.push(particle);
+    
+    // Remove oldest particles if we exceed max
+    if (tailParticles.length > maxTailParticles) {
+      const oldParticle = tailParticles.shift();
+      scene.remove(oldParticle);
+      oldParticle.material.dispose();
+    }
+    
+    // Update existing particles
+    tailParticles.forEach((particle, index) => {
+      // Reduce life (slower fade for longer tail)
+      particle.userData.life -= 0.015; // Reduced from 0.02
+      
+      // Apply velocity
+      particle.position.add(particle.userData.velocity);
+      
+      // Apply drag
+      particle.userData.velocity.multiplyScalar(0.99); // Reduced drag
+      
+      // Update opacity based on life (stronger opacity)
+      const opacity = particle.userData.life;
+      particle.material.opacity = opacity * 1.0; // Increased from 0.8
+      
+      // Remove dead particles
+      if (particle.userData.life <= 0) {
+        scene.remove(particle);
+        particle.material.dispose();
+        tailParticles.splice(index, 1);
+      }
+    });
+  }
+
   // Function to create cluster template
   function createClusterTemplate(getRandom, starColors) {
     const clusterSize = getRandom() * 45 + 15;
-    const starCount = Math.floor(getRandom() * 200 + 100); // Reduced from 700+500 to 200+100
-    
-    const cluster = {
-      stars: [],
-      rendered: false,
+    const starCount = Math.floor(getRandom() * 400 + 200); // Increased from 200+100 to 400+200
+      
+      const cluster = {
+        stars: [],
+        rendered: false,
       id: Math.random(),
       template: true
-    };
+      };
 
-    // Pre-create star data with multiple density cores within the cluster
-    const densityCenters = [];
-    const numCenters = Math.floor(getRandom() * 4 + 3); // 3-6 density cores
-    
-    for (let c = 0; c < numCenters; c++) {
-      densityCenters.push({
-        offset: new THREE.Vector3(
-          (getRandom() - 0.5) * clusterSize * 0.7,
-          (getRandom() - 0.5) * clusterSize * 0.7,
-          (getRandom() - 0.5) * clusterSize * 0.7
-        ),
-        density: getRandom() * 0.6 + 0.4, // 0.4-1.0 density weight
-        radius: getRandom() * 0.3 + 0.2 // 0.2-0.5 tightness of core
-      });
-    }
-    
-    for (let j = 0; j < starCount; j++) {
-      const size = getRandom() * 0.15 + 0.05;
-      const color = starColors[Math.floor(getRandom() * starColors.length)];
+      // Pre-create star data with multiple density cores within the cluster
+      const densityCenters = [];
+      const numCenters = Math.floor(getRandom() * 4 + 3); // 3-6 density cores
       
-      // Probabilistically choose a density center based on its density weight
-      const totalDensity = densityCenters.reduce((sum, c) => sum + c.density, 0);
-      let randomPoint = getRandom() * totalDensity;
-      let chosenCenter = densityCenters[0];
-      
-      for (let c = 0; c < densityCenters.length; c++) {
-        randomPoint -= densityCenters[c].density;
-        if (randomPoint <= 0) {
-          chosenCenter = densityCenters[c];
-          break;
-        }
+      for (let c = 0; c < numCenters; c++) {
+        densityCenters.push({
+          offset: new THREE.Vector3(
+            (getRandom() - 0.5) * clusterSize * 0.7,
+            (getRandom() - 0.5) * clusterSize * 0.7,
+            (getRandom() - 0.5) * clusterSize * 0.7
+          ),
+          density: getRandom() * 0.6 + 0.4, // 0.4-1.0 density weight
+          radius: getRandom() * 0.3 + 0.2 // 0.2-0.5 tightness of core
+        });
       }
       
-      // Position star near chosen density center with reduced falloff
-      const falloff = Math.pow(getRandom(), 0.8 + chosenCenter.radius * 0.5);
-      const starOffset = new THREE.Vector3(
-        chosenCenter.offset.x + (getRandom() - 0.5) * clusterSize * falloff * 0.8,
-        chosenCenter.offset.y + (getRandom() - 0.5) * clusterSize * falloff * 0.7,
-        chosenCenter.offset.z + (getRandom() - 0.5) * clusterSize * falloff * 0.8
-      );
-      
-      const starData = {
+      for (let j = 0; j < starCount; j++) {
+        const size = getRandom() * 0.15 + 0.05;
+        const color = starColors[Math.floor(getRandom() * starColors.length)];
+        
+        // Probabilistically choose a density center based on its density weight
+        const totalDensity = densityCenters.reduce((sum, c) => sum + c.density, 0);
+        let randomPoint = getRandom() * totalDensity;
+        let chosenCenter = densityCenters[0];
+        
+        for (let c = 0; c < densityCenters.length; c++) {
+          randomPoint -= densityCenters[c].density;
+          if (randomPoint <= 0) {
+            chosenCenter = densityCenters[c];
+            break;
+          }
+        }
+        
+        // Position star near chosen density center with reduced falloff
+        const falloff = Math.pow(getRandom(), 0.8 + chosenCenter.radius * 0.5);
+        const starOffset = new THREE.Vector3(
+          chosenCenter.offset.x + (getRandom() - 0.5) * clusterSize * falloff * 0.8,
+          chosenCenter.offset.y + (getRandom() - 0.5) * clusterSize * falloff * 0.7,
+          chosenCenter.offset.z + (getRandom() - 0.5) * clusterSize * falloff * 0.8
+        );
+        
+        const starData = {
         position: starOffset.clone(), // Relative position, will be set when instantiated
-        originalPos: null,
-        size: size,
-        color: color,
-        velocity: new THREE.Vector3(),
-        mesh: null
-      };
-      starData.originalPos = starData.position.clone();
+          originalPos: null,
+          size: size,
+          color: color,
+          velocity: new THREE.Vector3(),
+          mesh: null
+        };
+        starData.originalPos = starData.position.clone();
+        
+        cluster.stars.push(starData);
+      }
       
-      cluster.stars.push(starData);
-    }
-    
     return cluster;
   }
 
@@ -224,7 +283,16 @@
       center: centerPosition.clone(),
       stars: [],
       rendered: false,
-      id: Math.random()
+      id: Math.random(),
+      // Rotation properties
+      rotationSpeed: (Math.random() - 0.5) * 0.007, // Random rotation speed between -0.003 and 0.003 (1/3 of original)
+      targetRotationSpeed: (Math.random() - 0.5) * 0.007, // Target rotation speed for smooth changes
+      rotationAxis: new THREE.Vector3(
+        Math.random() - 0.5,
+        Math.random() - 0.5,
+        Math.random() - 0.5
+      ).normalize(), // Random rotation axis
+      rotationAngle: 0 // Current rotation angle
     };
     
     // Clone star data from template
@@ -274,6 +342,9 @@
     // Scene setup
     scene = new THREE.Scene();
     scene.background = new THREE.Color(0x000510);
+    
+    // Add atmospheric fog
+    scene.fog = new THREE.FogExp2(0x000510, 0.003); // Increased density for shorter fog distance
 
     // Camera
     camera = new THREE.PerspectiveCamera(
@@ -298,6 +369,20 @@
     });
     sphere = new THREE.Mesh(sphereGeom, sphereMat);
     scene.add(sphere);
+    
+    // Add rotation properties to sphere
+    sphere.userData = {
+      rotationSpeeds: {
+        main: 0.005,    // Main sphere rotation speed
+        glow: -0.003,   // Glow layer (opposite direction)
+        wave: 0.008     // Wave layer (different speed)
+      },
+      rotationAxes: {
+        main: new THREE.Vector3(0, 1, 0),     // Y-axis rotation
+        glow: new THREE.Vector3(1, 0, 0),    // X-axis rotation
+        wave: new THREE.Vector3(0, 0, 1)     // Z-axis rotation
+      }
+    };
 
     // Sphere glow
     const glowGeom = new THREE.SphereGeometry(1.2, 32, 32);
@@ -308,6 +393,7 @@
       side: THREE.BackSide
     });
     const glow = new THREE.Mesh(glowGeom, glowMat);
+    glow.userData = { layerType: 'glow' };
     sphere.add(glow);
 
     // Push wave
@@ -319,6 +405,7 @@
       wireframe: true
     });
     const wave = new THREE.Mesh(waveGeom, waveMat);
+    wave.userData = { layerType: 'wave' };
     sphere.add(wave);
 
     // Pre-create fixed path using seed with smooth inertia-based movement
@@ -356,7 +443,7 @@
     }
 
     // Pre-create cluster pool (only create data, not meshes)
-    const starColors = [0xff00ff, 0x00ffff, 0xffff00, 0xff0088, 0x00ff88];
+    const starColors = [0xffff00, 0xff8800, 0xff4400]; // Yellow, Orange, Red
     
     // Create cluster templates for pooling
     for (let i = 0; i < 20; i++) { // Pre-create 20 cluster templates
@@ -383,9 +470,9 @@
       }
       
       // Determine which clusters should be active (show clusters ahead and behind)
-      const clusterSpacing = 8; // Space between clusters (reduced from 15 for visibility)
-      const lookAhead = 12; // Show clusters this many steps ahead (increased for visibility)
-      const lookBehind = 3; // Show clusters this many steps behind (increased for visibility)
+      const clusterSpacing = 4; // Space between clusters (reduced from 8 for higher density)
+      const lookAhead = 15; // Show clusters this many steps ahead (increased for more clusters)
+      const lookBehind = 4; // Show clusters this many steps behind (increased for more clusters)
       
       const startIndex = Math.max(0, closestPathIndex - lookBehind);
       const endIndex = Math.min(pathPoints.length - 1, closestPathIndex + lookAhead);
@@ -424,14 +511,14 @@
         const isAhead = i > closestPathIndex;
         
         if (isAhead && distToSphere < renderDistance * 1.5 && activeClusters.length < maxActiveClusters) {
-          // Check if cluster already exists at this position (reduced minimum distance for visibility)
+          // Check if cluster already exists at this position (reduced minimum distance for higher density)
           const exists = activeClusters.some(cluster => 
-            cluster.center.distanceTo(pathPos) < 25
+            cluster.center.distanceTo(pathPos) < 15
           );
           
           if (!exists) {
-            // Create offset from path (reduced range for better visibility)
-            const offsetDistance = getRandom() * 30 + 15;
+            // Create offset from path (reduced range for higher density)
+            const offsetDistance = getRandom() * 20 + 10;
             const offset = new THREE.Vector3(
               (getRandom() - 0.5) * offsetDistance,
               (getRandom() - 0.5) * offsetDistance * 0.8,
@@ -582,6 +669,25 @@
       
       sphere.position.copy(targetPos);
 
+      // Apply multi-layer rotation to sphere
+      if (sphere.userData && sphere.userData.rotationSpeeds) {
+        // Rotate main sphere
+        sphere.rotateOnAxis(sphere.userData.rotationAxes.main, sphere.userData.rotationSpeeds.main);
+        
+        // Rotate child layers
+        sphere.children.forEach(child => {
+          if (child.userData && child.userData.layerType) {
+            const layerType = child.userData.layerType;
+            if (sphere.userData.rotationSpeeds[layerType] && sphere.userData.rotationAxes[layerType]) {
+              child.rotateOnAxis(
+                sphere.userData.rotationAxes[layerType], 
+                sphere.userData.rotationSpeeds[layerType]
+              );
+            }
+          }
+        });
+      }
+
       // Manage active clusters (only 3-5 clusters active at once)
       manageActiveClusters();
 
@@ -598,13 +704,29 @@
             }
           }
           
-          // Render this cluster if not already rendered (OPTIMIZED: LOD + Object pooling + Adaptive quality)
+          // Render this cluster if not already rendered (DYNAMIC LOD based on distance to orb)
           if (!cluster.rendered) {
-            const starCount = Math.max(10, Math.floor(cluster.stars.length * lodMultipliers[lodLevel] * adaptiveQuality)); // Ensure minimum 10 stars
+            // Dynamic LOD: More stars as cluster gets closer to sphere
+            const distToSphere = cluster.center.distanceTo(sphere.position);
+            let dynamicMultiplier;
             
-            // Debug: Log LOD calculation
+            if (distToSphere < 20) {
+              dynamicMultiplier = 1.0; // Full stars when very close
+            } else if (distToSphere < 40) {
+              dynamicMultiplier = 0.8; // 80% stars when close
+            } else if (distToSphere < 60) {
+              dynamicMultiplier = 0.6; // 60% stars when medium distance
+            } else if (distToSphere < 80) {
+              dynamicMultiplier = 0.4; // 40% stars when far
+            } else {
+              dynamicMultiplier = 0.2; // 20% stars when very far
+            }
+            
+            const starCount = Math.max(30, Math.floor(cluster.stars.length * dynamicMultiplier * adaptiveQuality));
+            
+            // Debug: Log dynamic LOD calculation
             if (frameCount % 30 === 0) {
-              console.log(`LOD: Distance: ${distToCluster.toFixed(1)}, Level: ${lodLevel}, Multiplier: ${lodMultipliers[lodLevel]}, Adaptive: ${adaptiveQuality.toFixed(2)}, Final count: ${starCount}/${cluster.stars.length}`);
+              console.log(`Dynamic LOD: Distance to sphere: ${distToSphere.toFixed(1)}, Multiplier: ${dynamicMultiplier.toFixed(2)}, Adaptive: ${adaptiveQuality.toFixed(2)}, Final count: ${starCount}/${cluster.stars.length}`);
             }
             
             // Temporarily disable instanced rendering for debugging
@@ -640,6 +762,31 @@
           } else if (lodLevel >= 1) {
             // Apply fake physics to non-interactive clusters
             applyFakePhysics(cluster, distToCluster);
+          }
+          
+          // Apply slow rotation to cluster
+          if (cluster.rendered && cluster.stars.length > 0) {
+            // Smoothly interpolate rotation speed towards target
+            cluster.rotationSpeed += (cluster.targetRotationSpeed - cluster.rotationSpeed) * 0.02; // Smooth interpolation
+            
+            cluster.rotationAngle += cluster.rotationSpeed;
+            
+            // Create rotation matrix
+            const rotationMatrix = new THREE.Matrix4().makeRotationAxis(cluster.rotationAxis, cluster.rotationAngle);
+            
+            // Apply rotation to all star meshes
+            cluster.stars.forEach(starData => {
+              if (starData.mesh) {
+                // Get relative position from cluster center
+                const relativePos = starData.position.clone().sub(cluster.center);
+                
+                // Apply rotation
+                relativePos.applyMatrix4(rotationMatrix);
+                
+                // Set new position
+                starData.mesh.position.copy(cluster.center.clone().add(relativePos));
+              }
+            });
           }
         }
       });
@@ -792,6 +939,19 @@
           }
       }
 
+      // Smoothly change cluster rotation when sphere interacts with it
+      if (currentCluster && minDist < 20) {
+        // Calculate interaction strength based on distance
+        const interactionStrength = Math.max(0, (20 - minDist) / 20);
+        
+        // Change target rotation speed based on interaction
+        const rotationChange = (Math.random() - 0.5) * 0.01 * interactionStrength;
+        currentCluster.targetRotationSpeed += rotationChange;
+        
+        // Keep rotation speed within reasonable bounds
+        currentCluster.targetRotationSpeed = Math.max(-0.01, Math.min(0.01, currentCluster.targetRotationSpeed));
+      }
+
       // Update trail - add new position (OPTIMIZED: Throttled updates)
       trailUpdateCounter++;
       if (trailUpdateCounter % 2 === 0) { // Update every other frame
@@ -838,6 +998,9 @@
 
       // Update adaptive quality based on frame rate
       updateAdaptiveQuality();
+      
+      // Update particle tail
+      updateTailParticles();
 
       // Debug: Log sphere position every 60 frames
       if (frameCount % 60 === 0) {
@@ -855,6 +1018,7 @@
         console.log(`Performance: Active clusters: ${activeClusters.length}, Rendered: ${renderedClusters}, Active stars: ${activeStars}, Geometry pool: ${geometryPool.length}, Material pool: ${materialPool.length}, Adaptive quality: ${adaptiveQuality.toFixed(2)}, Current cluster: ${currentCluster ? `Yes (dist: ${minDist.toFixed(1)})` : 'No'}`);
       }
 
+      frameCount++;
       renderer.render(scene, camera);
     };
     animate();
