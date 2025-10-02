@@ -1,0 +1,17 @@
+{
+  "name": "threejs-stars",
+  "version": "1.0.0",
+  "description": "A beautiful interactive 3D starfield created with Three.js",
+  "main": "index.html",
+  "scripts": {
+    "dev": "live-server --port=3000 --open=/index.html",
+    "start": "live-server --port=3000 --open=/index.html",
+    "serve": "python -m http.server 8000"
+  },
+  "keywords": ["threejs", "3d", "stars", "webgl", "animation"],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "live-server": "^1.2.2"
+  }
+}
