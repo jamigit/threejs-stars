@@ -50,6 +50,20 @@
   let adaptiveQuality = 1.0; // Quality multiplier
   let lastFrameTime = 0;
 
+  // Camera dampening variables
+  let cameraTargetPosition = new THREE.Vector3();
+  let cameraCurrentPosition = new THREE.Vector3();
+  let cameraDampening = 0.05; // How smoothly camera follows sphere
+  let cameraLookAtTarget = new THREE.Vector3();
+  let cameraLookAtCurrent = new THREE.Vector3();
+  let lookAtDampening = 0.08; // How smoothly camera looks at sphere
+  let sphereOffsetX = 0; // Current X offset from original position
+  let sphereVelocityX = 0; // X velocity for smooth movement
+  let sphereOffsetY = 0; // Current Y offset from original position
+  let sphereVelocityY = 0; // Y velocity for smooth movement
+  let keysPressed = { a: false, d: false, w: false, s: false }; // Track which keys are pressed
+  let originalSphereY = 0; // Store original Y position for wobble effect
+
   // Function to update particle tail
   function updateTailParticles() {
     // Add new particle at sphere position (every frame for stronger tail)
@@ -97,6 +111,97 @@
         tailParticles.splice(index, 1);
       }
     });
+  }
+
+  // Function to update sphere movement based on keyboard input
+  function updateSphereMovement() {
+    const baseAcceleration = 0.003; // Further reduced base acceleration rate for slower movement
+    const accelerationMultiplier = 1.03; // Further reduced acceleration multiplier for smoother buildup
+    const friction = 0.97; // Increased friction for slower stopping
+    const maxSpeed = 0.12; // Further reduced maximum movement speed
+    const maxDeviation = 15; // Increased maximum distance from center position
+    const pullbackForce = 0.008; // Further reduced pullback force for much gentler return
+    const wobbleStrength = 0.2; // Reduced wobble strength for smoother effect
+    
+    // Apply input forces with accelerating effect (X-axis)
+    if (keysPressed.a) {
+      // Increase acceleration over time for smooth start
+      const currentAcceleration = baseAcceleration * Math.pow(accelerationMultiplier, Math.abs(sphereVelocityX) * 20);
+      sphereVelocityX += currentAcceleration; // A now moves right (was left)
+    }
+    if (keysPressed.d) {
+      // Increase acceleration over time for smooth start
+      const currentAcceleration = baseAcceleration * Math.pow(accelerationMultiplier, Math.abs(sphereVelocityX) * 20);
+      sphereVelocityX -= currentAcceleration; // D now moves left (was right)
+    }
+    
+    // Apply input forces with accelerating effect (Y-axis)
+    if (keysPressed.w) {
+      // Increase acceleration over time for smooth start
+      const currentAcceleration = baseAcceleration * Math.pow(accelerationMultiplier, Math.abs(sphereVelocityY) * 20);
+      sphereVelocityY += currentAcceleration; // W moves up
+    }
+    if (keysPressed.s) {
+      // Increase acceleration over time for smooth start
+      const currentAcceleration = baseAcceleration * Math.pow(accelerationMultiplier, Math.abs(sphereVelocityY) * 20);
+      sphereVelocityY -= currentAcceleration; // S moves down
+    }
+    
+    // Apply pullback force when no keys are pressed (X-axis)
+    if (!keysPressed.a && !keysPressed.d) {
+      // Apply friction
+      sphereVelocityX *= friction;
+      
+      // Apply pullback force towards center
+      const pullbackDirection = -Math.sign(sphereOffsetX); // Direction towards center
+      const pullbackStrength = pullbackForce * Math.abs(sphereOffsetX); // Stronger pull when further from center
+      sphereVelocityX += pullbackDirection * pullbackStrength;
+    }
+    
+    // Apply pullback force when no keys are pressed (Y-axis)
+    if (!keysPressed.w && !keysPressed.s) {
+      // Apply friction
+      sphereVelocityY *= friction;
+      
+      // Apply pullback force towards center
+      const pullbackDirection = -Math.sign(sphereOffsetY); // Direction towards center
+      const pullbackStrength = pullbackForce * Math.abs(sphereOffsetY); // Stronger pull when further from center
+      sphereVelocityY += pullbackDirection * pullbackStrength;
+    }
+    
+    // Limit maximum speed (X-axis)
+    sphereVelocityX = Math.max(-maxSpeed, Math.min(maxSpeed, sphereVelocityX));
+    
+    // Limit maximum speed (Y-axis)
+    sphereVelocityY = Math.max(-maxSpeed, Math.min(maxSpeed, sphereVelocityY));
+    
+    // Update offset (X-axis)
+    sphereOffsetX += sphereVelocityX;
+    
+    // Update offset (Y-axis)
+    sphereOffsetY += sphereVelocityY;
+    
+    // Enforce maximum deviation from center (X-axis)
+    if (Math.abs(sphereOffsetX) > maxDeviation) {
+      sphereOffsetX = Math.sign(sphereOffsetX) * maxDeviation;
+      sphereVelocityX = 0; // Stop at boundary
+    }
+    
+    // Enforce maximum deviation from center (Y-axis)
+    if (Math.abs(sphereOffsetY) > maxDeviation) {
+      sphereOffsetY = Math.sign(sphereOffsetY) * maxDeviation;
+      sphereVelocityY = 0; // Stop at boundary
+    }
+    
+    // Apply wobble effect when returning to center (only for X-axis movement)
+    if (!keysPressed.a && !keysPressed.d && Math.abs(sphereOffsetX) > 0.1) {
+      // Add smooth wobble to Y position with slower oscillation
+      const wobbleAmount = Math.sin(frameCount * 0.1) * wobbleStrength * Math.abs(sphereOffsetX) * 0.5;
+      sphere.position.y = originalSphereY + sphereOffsetY + wobbleAmount;
+    } else {
+      // Return Y to original position more smoothly and slowly
+      sphere.position.y = originalSphereY + sphereOffsetY;
+    }
   }
 
   // Function to create cluster template
@@ -285,8 +390,7 @@
       rendered: false,
       id: Math.random(),
       // Rotation properties
-      rotationSpeed: (Math.random() - 0.5) * 0.007, // Random rotation speed between -0.003 and 0.003 (1/3 of original)
-      targetRotationSpeed: (Math.random() - 0.5) * 0.007, // Target rotation speed for smooth changes
+      rotationSpeed: (Math.random() - 0.5) * 0.0035, // Random rotation speed between -0.00175 and 0.00175 (half of original)
       rotationAxis: new THREE.Vector3(
         Math.random() - 0.5,
         Math.random() - 0.5,
@@ -354,6 +458,10 @@
       1000
     );
     camera.position.set(0, 8, 18);
+    
+    // Initialize camera dampening positions
+    cameraCurrentPosition.copy(camera.position);
+    cameraLookAtCurrent.set(0, 0, 0);
 
     // Renderer
     renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -363,7 +471,7 @@
     // Create glowing sphere
     const sphereGeom = new THREE.SphereGeometry(0.8, 32, 32);
     const sphereMat = new THREE.MeshBasicMaterial({
-      color: 0x00ffff,
+      color: 0xffff00, // Yellow
       transparent: true,
       opacity: 0.9
     });
@@ -387,7 +495,7 @@
     // Sphere glow
     const glowGeom = new THREE.SphereGeometry(1.2, 32, 32);
     const glowMat = new THREE.MeshBasicMaterial({
-      color: 0x00ffff,
+      color: 0xff8800, // Orange
       transparent: true,
       opacity: 0.3,
       side: THREE.BackSide
@@ -399,7 +507,7 @@
     // Push wave
     const waveGeom = new THREE.SphereGeometry(2, 32, 32);
     const waveMat = new THREE.MeshBasicMaterial({
-      color: 0x00ffff,
+      color: 0xff4400, // Red
       transparent: true,
       opacity: 0.1,
       wireframe: true
@@ -443,7 +551,7 @@
     }
 
     // Pre-create cluster pool (only create data, not meshes)
-    const starColors = [0xffff00, 0xff8800, 0xff4400]; // Yellow, Orange, Red
+    const starColors = [0x8800ff, 0xff00ff, 0x0088ff, 0x4400ff, 0x00ffff]; // Purple, Pink, Blue, Violet, Aqua
     
     // Create cluster templates for pooling
     for (let i = 0; i < 20; i++) { // Pre-create 20 cluster templates
@@ -612,11 +720,35 @@
         updateModeDisplay();
         console.log('Physics mode:', physicsMode);
       }
+      if (e.code === 'KeyA') {
+        keysPressed.a = true;
+      }
+      if (e.code === 'KeyD') {
+        keysPressed.d = true;
+      }
+      if (e.code === 'KeyW') {
+        keysPressed.w = true;
+      }
+      if (e.code === 'KeyS') {
+        keysPressed.s = true;
+      }
     };
 
     const onKeyUp = (e) => {
       if (e.code === 'Space') {
         targetSpeed = 0.12;
+      }
+      if (e.code === 'KeyA') {
+        keysPressed.a = false;
+      }
+      if (e.code === 'KeyD') {
+        keysPressed.d = false;
+      }
+      if (e.code === 'KeyW') {
+        keysPressed.w = false;
+      }
+      if (e.code === 'KeyS') {
+        keysPressed.s = false;
       }
     };
 
@@ -668,6 +800,20 @@
       }
       
       sphere.position.copy(targetPos);
+      
+      // Store original Y position for wobble effect (only once)
+      if (originalSphereY === 0) {
+        originalSphereY = sphere.position.y;
+      }
+
+      // Apply sphere movement controls
+      updateSphereMovement();
+      
+      // Apply X offset to sphere position
+      sphere.position.x += sphereOffsetX;
+      
+      // Apply Y offset to sphere position
+      sphere.position.y += sphereOffsetY;
 
       // Apply multi-layer rotation to sphere
       if (sphere.userData && sphere.userData.rotationSpeeds) {
@@ -766,9 +912,6 @@
           
           // Apply slow rotation to cluster
           if (cluster.rendered && cluster.stars.length > 0) {
-            // Smoothly interpolate rotation speed towards target
-            cluster.rotationSpeed += (cluster.targetRotationSpeed - cluster.rotationSpeed) * 0.02; // Smooth interpolation
-            
             cluster.rotationAngle += cluster.rotationSpeed;
             
             // Create rotation matrix
@@ -939,18 +1082,6 @@
           }
       }
 
-      // Smoothly change cluster rotation when sphere interacts with it
-      if (currentCluster && minDist < 20) {
-        // Calculate interaction strength based on distance
-        const interactionStrength = Math.max(0, (20 - minDist) / 20);
-        
-        // Change target rotation speed based on interaction
-        const rotationChange = (Math.random() - 0.5) * 0.01 * interactionStrength;
-        currentCluster.targetRotationSpeed += rotationChange;
-        
-        // Keep rotation speed within reasonable bounds
-        currentCluster.targetRotationSpeed = Math.max(-0.01, Math.min(0.01, currentCluster.targetRotationSpeed));
-      }
 
       // Update trail - add new position (OPTIMIZED: Throttled updates)
       trailUpdateCounter++;
@@ -993,8 +1124,19 @@
       const camY = sphere.position.y + radius * Math.cos(phi);
       const camZ = sphere.position.z + radius * Math.sin(phi) * Math.sin(theta);
       
-      camera.position.set(camX, camY, camZ);
-      camera.lookAt(sphere.position);
+      // Set target camera position
+      cameraTargetPosition.set(camX, camY, camZ);
+      
+      // Smoothly interpolate camera position towards target
+      cameraCurrentPosition.lerp(cameraTargetPosition, cameraDampening);
+      camera.position.copy(cameraCurrentPosition);
+      
+      // Set target look-at position
+      cameraLookAtTarget.copy(sphere.position);
+      
+      // Smoothly interpolate look-at position towards target
+      cameraLookAtCurrent.lerp(cameraLookAtTarget, lookAtDampening);
+      camera.lookAt(cameraLookAtCurrent);
 
       // Update adaptive quality based on frame rate
       updateAdaptiveQuality();
