@@ -2,6 +2,7 @@
 (function() {
   // Variables to store references
   let scene, camera, renderer, sphere;
+  let skybox;
   let pathPoints = [];
   let trailPoints = [];
   let starClusters = [];
@@ -23,15 +24,11 @@
   let clusterPool = []; // Pool of pre-created cluster data
   let frameCount = 0;
   
-  // Particle tail system
+  // Particle tail system - red and orange particle tail
   let tailParticles = [];
-  let maxTailParticles = 100; // Increased from 50
-  let tailParticleGeometry = new THREE.SphereGeometry(0.08, 8, 8); // Increased size from 0.05
-  let tailParticleMaterial = new THREE.MeshBasicMaterial({ 
-      color: 0x00ffff,
-      transparent: true,
-    opacity: 1.0 // Increased from 0.8
-  });
+  let maxTailParticles = 200; // Increased for wider tail
+  let tailParticleGeometry = new THREE.SphereGeometry(0.08, 8, 8); // Larger particles for wider tail
+  let tailColors = [0xff0000, 0xff4400]; // Red and orange colors
   
   // Additional performance optimizations
   let totalPathLength = 0; // Cache path length calculation
@@ -64,18 +61,27 @@
   let keysPressed = { a: false, d: false, w: false, s: false }; // Track which keys are pressed
   let originalSphereY = 0; // Store original Y position for wobble effect
 
-  // Function to update particle tail
+  // Function to update particle tail - red and orange particle tail
   function updateTailParticles() {
-    // Add new particle at sphere position (every frame for stronger tail)
-    const particle = new THREE.Mesh(tailParticleGeometry, tailParticleMaterial.clone());
+    // Add new particle at sphere position (every frame for wide tail)
+    const particleColor = tailColors[Math.floor(Math.random() * tailColors.length)]; // Random red or orange
+    const particleMaterial = new THREE.MeshBasicMaterial({ 
+      color: particleColor,
+      transparent: true, 
+      opacity: 0.9, // High opacity for visibility
+      emissive: particleColor,
+      emissiveIntensity: 0.5
+    });
+    
+    const particle = new THREE.Mesh(tailParticleGeometry, particleMaterial);
     particle.position.copy(sphere.position);
     particle.userData = {
       life: 1.0, // Full opacity initially
       maxLife: 1.0,
       velocity: new THREE.Vector3(
-        (Math.random() - 0.5) * 0.05, // Reduced random velocity
-        (Math.random() - 0.5) * 0.05,
-        (Math.random() - 0.5) * 0.05
+        (Math.random() - 0.5) * 0.08, // Wider random velocity for wider tail
+        (Math.random() - 0.5) * 0.08,
+        (Math.random() - 0.5) * 0.08
       )
     };
     
@@ -89,20 +95,20 @@
       oldParticle.material.dispose();
     }
     
-    // Update existing particles
+    // Update existing particles (red and orange tail)
     tailParticles.forEach((particle, index) => {
-      // Reduce life (slower fade for longer tail)
-      particle.userData.life -= 0.015; // Reduced from 0.02
+      // Reduce life (much slower fade for longer tail)
+      particle.userData.life -= 0.008; // Much slower fade for longer tail
       
       // Apply velocity
       particle.position.add(particle.userData.velocity);
       
       // Apply drag
-      particle.userData.velocity.multiplyScalar(0.99); // Reduced drag
+      particle.userData.velocity.multiplyScalar(0.99); // Much less drag for longer tail
       
-      // Update opacity based on life (stronger opacity)
+      // Update opacity based on life (bright colors)
       const opacity = particle.userData.life;
-      particle.material.opacity = opacity * 1.0; // Increased from 0.8
+      particle.material.opacity = opacity * 0.9; // High opacity for visibility
       
       // Remove dead particles
       if (particle.userData.life <= 0) {
@@ -116,11 +122,14 @@
   // Function to update sphere movement based on keyboard input
   function updateSphereMovement() {
     const baseAcceleration = 0.003; // Further reduced base acceleration rate for slower movement
+    const verticalAcceleration = 0.0015; // Slower acceleration for vertical movement
     const accelerationMultiplier = 1.03; // Further reduced acceleration multiplier for smoother buildup
-    const friction = 0.97; // Increased friction for slower stopping
+    const friction = 0.98; // Increased friction for much smoother stopping
     const maxSpeed = 0.12; // Further reduced maximum movement speed
+    const maxVerticalSpeed = 0.06; // Slower maximum speed for vertical movement
     const maxDeviation = 15; // Increased maximum distance from center position
-    const pullbackForce = 0.008; // Further reduced pullback force for much gentler return
+    const pullbackForce = 0.005; // Further reduced pullback force for much gentler return
+    const verticalPullbackForce = 0.0025; // Even gentler pullback for vertical movement
     const wobbleStrength = 0.2; // Reduced wobble strength for smoother effect
     
     // Apply input forces with accelerating effect (X-axis)
@@ -135,15 +144,15 @@
       sphereVelocityX -= currentAcceleration; // D now moves left (was right)
     }
     
-    // Apply input forces with accelerating effect (Y-axis)
+    // Apply input forces with accelerating effect (Y-axis) - SLOWER
     if (keysPressed.w) {
-      // Increase acceleration over time for smooth start
-      const currentAcceleration = baseAcceleration * Math.pow(accelerationMultiplier, Math.abs(sphereVelocityY) * 20);
+      // Increase acceleration over time for smooth start - SLOWER
+      const currentAcceleration = verticalAcceleration * Math.pow(accelerationMultiplier, Math.abs(sphereVelocityY) * 20);
       sphereVelocityY += currentAcceleration; // W moves up
     }
     if (keysPressed.s) {
-      // Increase acceleration over time for smooth start
-      const currentAcceleration = baseAcceleration * Math.pow(accelerationMultiplier, Math.abs(sphereVelocityY) * 20);
+      // Increase acceleration over time for smooth start - SLOWER
+      const currentAcceleration = verticalAcceleration * Math.pow(accelerationMultiplier, Math.abs(sphereVelocityY) * 20);
       sphereVelocityY -= currentAcceleration; // S moves down
     }
     
@@ -158,22 +167,22 @@
       sphereVelocityX += pullbackDirection * pullbackStrength;
     }
     
-    // Apply pullback force when no keys are pressed (Y-axis)
+    // Apply pullback force when no keys are pressed (Y-axis) - SLOWER
     if (!keysPressed.w && !keysPressed.s) {
       // Apply friction
       sphereVelocityY *= friction;
       
-      // Apply pullback force towards center
+      // Apply pullback force towards center - SLOWER
       const pullbackDirection = -Math.sign(sphereOffsetY); // Direction towards center
-      const pullbackStrength = pullbackForce * Math.abs(sphereOffsetY); // Stronger pull when further from center
+      const pullbackStrength = verticalPullbackForce * Math.abs(sphereOffsetY); // Gentler pull for vertical
       sphereVelocityY += pullbackDirection * pullbackStrength;
     }
     
     // Limit maximum speed (X-axis)
     sphereVelocityX = Math.max(-maxSpeed, Math.min(maxSpeed, sphereVelocityX));
     
-    // Limit maximum speed (Y-axis)
-    sphereVelocityY = Math.max(-maxSpeed, Math.min(maxSpeed, sphereVelocityY));
+    // Limit maximum speed (Y-axis) - SLOWER
+    sphereVelocityY = Math.max(-maxVerticalSpeed, Math.min(maxVerticalSpeed, sphereVelocityY));
     
     // Update offset (X-axis)
     sphereOffsetX += sphereVelocityX;
@@ -206,8 +215,8 @@
 
   // Function to create cluster template
   function createClusterTemplate(getRandom, starColors) {
-    const clusterSize = getRandom() * 45 + 15;
-    const starCount = Math.floor(getRandom() * 400 + 200); // Increased from 200+100 to 400+200
+    const clusterSize = getRandom() * 80 + 40; // Much larger clusters (was 45+15, now 80+40)
+    const starCount = Math.floor(getRandom() * 600 + 300); // Much higher base star count for density
       
       const cluster = {
         stars: [],
@@ -233,7 +242,7 @@
       }
       
       for (let j = 0; j < starCount; j++) {
-        const size = getRandom() * 0.15 + 0.05;
+        const size = getRandom() * 0.375 + 0.0375; // Size variety: 0.0375 to 0.4125 (0.75x to 2.5x current range)
         const color = starColors[Math.floor(getRandom() * starColors.length)];
         
         // Probabilistically choose a density center based on its density weight
@@ -303,7 +312,10 @@
     
     const starCount = Math.min(cluster.stars.length, 200); // Limit instanced stars
     const geometry = new THREE.SphereGeometry(0.1, 6, 6); // Lower quality
-    const material = new THREE.MeshBasicMaterial();
+    const material = new THREE.MeshStandardMaterial({
+      emissive: 0xffffff,
+      emissiveIntensity: 0.2
+    });
     
     const instancedMesh = new THREE.InstancedMesh(geometry, material, starCount);
     
@@ -370,7 +382,11 @@
       }
     }
     // Create new material if none available
-    const mat = new THREE.MeshBasicMaterial({ color: color });
+    const mat = new THREE.MeshStandardMaterial({ 
+      color: color,
+      emissive: color,
+      emissiveIntensity: 0.3
+    });
     return mat;
   }
 
@@ -415,20 +431,81 @@
     return cluster;
   }
 
-  // Pre-calculate trail colors for better performance
+  // Pre-calculate trail colors for better performance - brighter colors
   const preCalculatedTrailColors = [];
   for (let i = 0; i < 200; i++) {
     const t = i / 200;
     const color = new THREE.Color();
     if (t < 0.5) {
-      color.setHSL(0.5 + t * 0.3, 1.0, 0.7);
+      color.setHSL(0.5 + t * 0.3, 1.0, 0.9); // Increased lightness for better visibility
     } else {
-      color.setHSL(0.65 + (t - 0.5) * 0.3, 1.0, 0.7);
+      color.setHSL(0.65 + (t - 0.5) * 0.3, 1.0, 0.9); // Increased lightness for better visibility
     }
     preCalculatedTrailColors.push(color);
   }
 
   // Initialize the scene
+  // Function to create skybox with starfield
+  function createSkybox() {
+    // Create starfield texture
+    const canvas = document.createElement('canvas');
+    canvas.width = 2048;
+    canvas.height = 2048;
+    const ctx = canvas.getContext('2d');
+    
+    // Fill with much darker blue space color
+    ctx.fillStyle = '#000208'; // Much darker blue
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    
+    // Add white stars
+    ctx.fillStyle = '#ffffff';
+    for (let i = 0; i < 1500; i++) {
+      const x = Math.random() * canvas.width;
+      const y = Math.random() * canvas.height;
+      const size = Math.random() * 1.5 + 0.3;
+      
+      ctx.beginPath();
+      ctx.arc(x, y, size, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    
+    // Add colored stars matching cluster colors
+    const clusterStarColors = ['#8800ff', '#ff00ff', '#0088ff', '#4400ff', '#00ffff']; // Purple, Pink, Blue, Violet, Aqua
+    for (let i = 0; i < 300; i++) {
+      const x = Math.random() * canvas.width;
+      const y = Math.random() * canvas.height;
+      const size = Math.random() * 2 + 0.5;
+      const color = clusterStarColors[Math.floor(Math.random() * clusterStarColors.length)];
+      
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc(x, y, size, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    
+    // Create texture from canvas
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.wrapS = THREE.RepeatWrapping;
+    texture.wrapT = THREE.RepeatWrapping;
+    
+    // Create skybox geometry
+    const skyboxGeometry = new THREE.BoxGeometry(5000, 5000, 5000); // Much larger skybox
+    
+    // Create materials for each face
+    const skyboxMaterials = [
+      new THREE.MeshBasicMaterial({ map: texture, side: THREE.BackSide }), // right
+      new THREE.MeshBasicMaterial({ map: texture, side: THREE.BackSide }), // left
+      new THREE.MeshBasicMaterial({ map: texture, side: THREE.BackSide }), // top
+      new THREE.MeshBasicMaterial({ map: texture, side: THREE.BackSide }), // bottom
+      new THREE.MeshBasicMaterial({ map: texture, side: THREE.BackSide }), // front
+      new THREE.MeshBasicMaterial({ map: texture, side: THREE.BackSide })  // back
+    ];
+    
+    // Create skybox mesh
+    skybox = new THREE.Mesh(skyboxGeometry, skyboxMaterials);
+    scene.add(skybox);
+  }
+
   function init() {
 
     // Seeded random number generator
@@ -445,17 +522,16 @@
 
     // Scene setup
     scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x000510);
+    scene.background = new THREE.Color(0x000208); // Much darker blue to match skybox
     
-    // Add atmospheric fog
-    scene.fog = new THREE.FogExp2(0x000510, 0.003); // Increased density for shorter fog distance
+    // Fog removed for clearer visibility
 
     // Camera
     camera = new THREE.PerspectiveCamera(
       75,
       window.innerWidth / window.innerHeight,
       0.1,
-      1000
+      10000
     );
     camera.position.set(0, 8, 18);
     
@@ -466,14 +542,29 @@
     // Renderer
     renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.toneMapping = THREE.ReinhardToneMapping;
+    renderer.toneMappingExposure = 3.0; // Increased from 1.5 to 3.0 for brighter scene
     document.getElementById('canvas').appendChild(renderer.domElement);
+
+    // Add lighting to brighten the scene
+    const ambientLight = new THREE.AmbientLight(0x404040, 0.6); // Soft white ambient light
+    scene.add(ambientLight);
+    
+    const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+    directionalLight.position.set(10, 10, 5);
+    scene.add(directionalLight);
+
+    // Create skybox with starfield
+    createSkybox();
 
     // Create glowing sphere
     const sphereGeom = new THREE.SphereGeometry(0.8, 32, 32);
-    const sphereMat = new THREE.MeshBasicMaterial({
+    const sphereMat = new THREE.MeshStandardMaterial({
       color: 0xffff00, // Yellow
       transparent: true,
-      opacity: 0.9
+      opacity: 0.9,
+      emissive: 0xffff00,
+      emissiveIntensity: 2.0 // Much stronger emissive lighting
     });
     sphere = new THREE.Mesh(sphereGeom, sphereMat);
     scene.add(sphere);
@@ -494,11 +585,13 @@
 
     // Sphere glow
     const glowGeom = new THREE.SphereGeometry(1.2, 32, 32);
-    const glowMat = new THREE.MeshBasicMaterial({
+    const glowMat = new THREE.MeshStandardMaterial({
       color: 0xff8800, // Orange
       transparent: true,
       opacity: 0.3,
-      side: THREE.BackSide
+      side: THREE.BackSide,
+      emissive: 0xff8800,
+      emissiveIntensity: 0.4
     });
     const glow = new THREE.Mesh(glowGeom, glowMat);
     glow.userData = { layerType: 'glow' };
@@ -506,11 +599,13 @@
 
     // Push wave
     const waveGeom = new THREE.SphereGeometry(2, 32, 32);
-    const waveMat = new THREE.MeshBasicMaterial({
+    const waveMat = new THREE.MeshStandardMaterial({
       color: 0xff4400, // Red
       transparent: true,
       opacity: 0.1,
-      wireframe: true
+      wireframe: true,
+      emissive: 0xff4400,
+      emissiveIntensity: 0.2
     });
     const wave = new THREE.Mesh(waveGeom, waveMat);
     wave.userData = { layerType: 'wave' };
@@ -578,7 +673,7 @@
       }
       
       // Determine which clusters should be active (show clusters ahead and behind)
-      const clusterSpacing = 4; // Space between clusters (reduced from 8 for higher density)
+      const clusterSpacing = 8; // Increased spacing between clusters for smoother transitions
       const lookAhead = 15; // Show clusters this many steps ahead (increased for more clusters)
       const lookBehind = 4; // Show clusters this many steps behind (increased for more clusters)
       
@@ -621,12 +716,12 @@
         if (isAhead && distToSphere < renderDistance * 1.5 && activeClusters.length < maxActiveClusters) {
           // Check if cluster already exists at this position (reduced minimum distance for higher density)
           const exists = activeClusters.some(cluster => 
-            cluster.center.distanceTo(pathPos) < 15
+            cluster.center.distanceTo(pathPos) < 30
           );
           
           if (!exists) {
             // Create offset from path (reduced range for higher density)
-            const offsetDistance = getRandom() * 20 + 10;
+            const offsetDistance = getRandom() * 30 + 15;
             const offset = new THREE.Vector3(
               (getRandom() - 0.5) * offsetDistance,
               (getRandom() - 0.5) * offsetDistance * 0.8,
@@ -672,7 +767,7 @@
     
     const trailMat = new THREE.LineBasicMaterial({
       vertexColors: true,
-      linewidth: 8,
+      linewidth: 12, // Increased line width for better visibility
       depthTest: false
     });
     
@@ -800,7 +895,7 @@
       }
       
       sphere.position.copy(targetPos);
-      
+
       // Store original Y position for wobble effect (only once)
       if (originalSphereY === 0) {
         originalSphereY = sphere.position.y;
@@ -814,6 +909,11 @@
       
       // Apply Y offset to sphere position
       sphere.position.y += sphereOffsetY;
+
+      // Move skybox to follow sphere (maintains constant distance)
+      if (skybox) {
+        skybox.position.copy(sphere.position);
+      }
 
       // Apply multi-layer rotation to sphere
       if (sphere.userData && sphere.userData.rotationSpeeds) {
@@ -852,20 +952,22 @@
           
           // Render this cluster if not already rendered (DYNAMIC LOD based on distance to orb)
           if (!cluster.rendered) {
-            // Dynamic LOD: More stars as cluster gets closer to sphere
+            // Dynamic LOD: Much higher star density when close to sphere
             const distToSphere = cluster.center.distanceTo(sphere.position);
             let dynamicMultiplier;
             
-            if (distToSphere < 20) {
-              dynamicMultiplier = 1.0; // Full stars when very close
-            } else if (distToSphere < 40) {
-              dynamicMultiplier = 0.8; // 80% stars when close
-            } else if (distToSphere < 60) {
-              dynamicMultiplier = 0.6; // 60% stars when medium distance
-            } else if (distToSphere < 80) {
-              dynamicMultiplier = 0.4; // 40% stars when far
+            if (distToSphere < 15) {
+              dynamicMultiplier = 2.5; // 250% stars when very close to sphere
+            } else if (distToSphere < 25) {
+              dynamicMultiplier = 2.0; // 200% stars when close to sphere
+            } else if (distToSphere < 35) {
+              dynamicMultiplier = 1.5; // 150% stars when medium-close
+            } else if (distToSphere < 50) {
+              dynamicMultiplier = 1.0; // Full stars when medium distance
+            } else if (distToSphere < 70) {
+              dynamicMultiplier = 0.7; // 70% stars when far
             } else {
-              dynamicMultiplier = 0.2; // 20% stars when very far
+              dynamicMultiplier = 0.4; // 40% stars when very far
             }
             
             const starCount = Math.max(30, Math.floor(cluster.stars.length * dynamicMultiplier * adaptiveQuality));
@@ -908,6 +1010,23 @@
           } else if (lodLevel >= 1) {
             // Apply fake physics to non-interactive clusters
             applyFakePhysics(cluster, distToCluster);
+          }
+          
+          // Always apply gentle return force to all rendered stars (even when sphere is far away)
+          if (cluster.rendered) {
+            cluster.stars.forEach(starData => {
+              if (starData.mesh && starData.velocity.length() > 0.001) {
+                // Apply very gentle return force to slowly drift back to original position
+                const returnForce = new THREE.Vector3()
+                  .subVectors(starData.originalPos, starData.mesh.position)
+                  .multiplyScalar(0.001); // Very gentle drift back
+                starData.velocity.add(returnForce);
+                
+                // Apply velocity and damping
+                starData.mesh.position.add(starData.velocity);
+                starData.velocity.multiplyScalar(0.998); // Very gentle damping
+              }
+            });
           }
           
           // Apply slow rotation to cluster
@@ -977,14 +1096,16 @@
               if (!starData.mesh) return;
               
               const dist = starData.mesh.position.distanceTo(sphere.position);
-              const pushRadius = 12; // Increased push radius for better interaction
+              const pushRadius = 16; // Reduced to 65% of original (25 * 0.65 = 16.25)
               
               // Only process stars within interaction range for better performance
               if (dist < pushRadius * 2) { // Process stars within 2x push radius
                 starsProcessed++;
               
               if (dist < pushRadius) {
-                  const force = (1 - dist / pushRadius) * 0.8; // Increased force for more noticeable interaction
+                  // Much gentler force calculation with smoother falloff
+                  const normalizedDist = dist / pushRadius;
+                  const force = Math.pow(1 - normalizedDist, 2) * 0.8; // Increased force for stronger effect
                 const direction = new THREE.Vector3()
                   .subVectors(starData.mesh.position, sphere.position)
                   .normalize();
@@ -993,18 +1114,18 @@
                   starsPushed++;
                   
                   // Debug: Log when stars are being pushed
-                  if (frameCount % 30 === 0 && force > 0.1) {
+                  if (frameCount % 30 === 0 && force > 0.05) {
                     console.log(`Pushing star! Force: ${force.toFixed(3)}, Distance: ${dist.toFixed(1)}`);
                   }
                 }
                 
                 // Apply physics only to nearby stars
               starData.mesh.position.add(starData.velocity);
-                starData.velocity.multiplyScalar(0.98); // Reduced damping for more visible movement
+                starData.velocity.multiplyScalar(0.995); // Much gentler damping for smoother movement
               
               const returnForce = new THREE.Vector3()
                 .subVectors(starData.originalPos, starData.mesh.position)
-                  .multiplyScalar(0.01); // Reduced return force for more dramatic movement
+                  .multiplyScalar(0.002); // Even gentler return force for very slow drift back
               starData.velocity.add(returnForce);
               }
             });
@@ -1020,10 +1141,12 @@
               
               // Sphere pushes stars
               const dist = starData.mesh.position.distanceTo(sphere.position);
-              const pushRadius = 12; // Increased push radius for better interaction
+              const pushRadius = 16; // Reduced to 65% of original (25 * 0.65 = 16.25)
               
               if (dist < pushRadius) {
-                const force = (1 - dist / pushRadius) * 0.8; // Increased force for more noticeable interaction
+                // Much gentler force calculation with smoother falloff
+                const normalizedDist = dist / pushRadius;
+                const force = Math.pow(1 - normalizedDist, 2) * 0.8; // Increased force for stronger effect
                 const direction = new THREE.Vector3()
                   .subVectors(starData.mesh.position, sphere.position)
                   .normalize();
@@ -1037,7 +1160,7 @@
               if (!starData.mesh) return;
               
             // Skip static stars to reduce collision checks
-            if (starData.velocity.length() < 0.05) return;
+            if (starData.velocity.length() < 0.02) return; // Higher threshold for gentler interaction
             
             currentCluster.stars.forEach((otherStar, otherIdx) => {
                 if (idx === otherIdx || !otherStar.mesh) return;
@@ -1047,16 +1170,18 @@
               const dy = Math.abs(starData.mesh.position.y - otherStar.mesh.position.y);
               const dz = Math.abs(starData.mesh.position.z - otherStar.mesh.position.z);
               
-              if (dx > 3 || dy > 3 || dz > 3) return; // Skip if too far
+              if (dx > 4 || dy > 4 || dz > 4) return; // Slightly larger interaction area
                 
                 const dist = starData.mesh.position.distanceTo(otherStar.mesh.position);
-                const interactionRadius = 3;
+                const interactionRadius = 4; // Increased interaction radius
                 
                 if (dist < interactionRadius && dist > 0.1) {
                   const velocityMagnitude = starData.velocity.length();
                   
-                  if (velocityMagnitude > 0.05) {
-                    const force = (1 - dist / interactionRadius) * velocityMagnitude * 0.15;
+                  if (velocityMagnitude > 0.02) { // Higher threshold for gentler interaction
+                    // Gentler force calculation with smoother falloff
+                    const normalizedDist = dist / interactionRadius;
+                    const force = Math.pow(1 - normalizedDist, 2) * velocityMagnitude * 0.2; // Increased force for stronger star interactions
                     const direction = new THREE.Vector3()
                       .subVectors(otherStar.mesh.position, starData.mesh.position)
                       .normalize();
@@ -1072,11 +1197,11 @@
               if (!starData.mesh) return;
               
               starData.mesh.position.add(starData.velocity);
-              starData.velocity.multiplyScalar(0.98); // Reduced damping for more visible movement
+              starData.velocity.multiplyScalar(0.995); // Much gentler damping for smoother movement
               
               const returnForce = new THREE.Vector3()
                 .subVectors(starData.originalPos, starData.mesh.position)
-                .multiplyScalar(0.01); // Reduced return force for more dramatic movement
+                .multiplyScalar(0.002); // Even gentler return force for very slow drift back
               starData.velocity.add(returnForce);
             });
           }
@@ -1141,7 +1266,7 @@
       // Update adaptive quality based on frame rate
       updateAdaptiveQuality();
       
-      // Update particle tail
+      // Update particle tail - thin tail
       updateTailParticles();
 
       // Debug: Log sphere position every 60 frames
