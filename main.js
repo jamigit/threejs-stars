@@ -142,12 +142,12 @@
     const baseAcceleration = 0.003; // Further reduced base acceleration rate for slower movement
     const verticalAcceleration = 0.0015; // Slower acceleration for vertical movement
     const accelerationMultiplier = 1.03; // Further reduced acceleration multiplier for smoother buildup
-    const friction = 0.98; // Increased friction for much smoother stopping
+    const friction = 0.92; // Even smoother deceleration
     const maxSpeed = 0.12; // Further reduced maximum movement speed
     const maxVerticalSpeed = 0.06; // Slower maximum speed for vertical movement
     const maxDeviation = 15; // Increased maximum distance from center position
-    const pullbackForce = 0.005; // Further reduced pullback force for much gentler return
-    const verticalPullbackForce = 0.0025; // Even gentler pullback for vertical movement
+    const pullbackForce = 0.008; // Stronger pullback force for better return to center
+    const verticalPullbackForce = 0.004; // Stronger pullback for vertical movement
     const wobbleStrength = 0.2; // Reduced wobble strength for smoother effect
     
     // Apply input forces with accelerating effect (X-axis)
@@ -174,26 +174,38 @@
       sphereVelocityY -= currentAcceleration; // S moves down
     }
     
-    // Apply pullback force when no keys are pressed (X-axis)
+    // Apply smooth deceleration when no keys are pressed (X-axis)
     if (!keysPressed.a && !keysPressed.d) {
-      // Apply friction
+      // Apply friction for smooth deceleration
       sphereVelocityX *= friction;
       
-      // Apply pullback force towards center
+      // Apply gradual pullback force proportional to distance from center
       const pullbackDirection = -Math.sign(sphereOffsetX); // Direction towards center
-      const pullbackStrength = pullbackForce * Math.abs(sphereOffsetX); // Stronger pull when further from center
+      const pullbackStrength = pullbackForce * Math.abs(sphereOffsetX) * 0.3; // Gradual pullback
       sphereVelocityX += pullbackDirection * pullbackStrength;
+      
+      // Apply stronger pullback force if velocity is low (near stopped)
+      if (Math.abs(sphereVelocityX) < 0.002) {
+        const strongPullbackStrength = pullbackForce * Math.abs(sphereOffsetX) * 0.7; // Stronger pull when nearly stopped
+        sphereVelocityX += pullbackDirection * strongPullbackStrength;
+      }
     }
     
-    // Apply pullback force when no keys are pressed (Y-axis) - SLOWER
+    // Apply smooth deceleration when no keys are pressed (Y-axis)
     if (!keysPressed.w && !keysPressed.s) {
-      // Apply friction
+      // Apply friction for smooth deceleration
       sphereVelocityY *= friction;
       
-      // Apply pullback force towards center - SLOWER
+      // Apply gradual pullback force proportional to distance from center
       const pullbackDirection = -Math.sign(sphereOffsetY); // Direction towards center
-      const pullbackStrength = verticalPullbackForce * Math.abs(sphereOffsetY); // Gentler pull for vertical
+      const pullbackStrength = verticalPullbackForce * Math.abs(sphereOffsetY) * 0.3; // Gradual pullback
       sphereVelocityY += pullbackDirection * pullbackStrength;
+      
+      // Apply stronger pullback force if velocity is low (near stopped)
+      if (Math.abs(sphereVelocityY) < 0.002) {
+        const strongPullbackStrength = verticalPullbackForce * Math.abs(sphereOffsetY) * 0.7; // Stronger pull when nearly stopped
+        sphereVelocityY += pullbackDirection * strongPullbackStrength;
+      }
     }
     
     // Limit maximum speed (X-axis)
@@ -220,15 +232,8 @@
       sphereVelocityY = 0; // Stop at boundary
     }
     
-    // Apply wobble effect when returning to center (only for X-axis movement)
-    if (!keysPressed.a && !keysPressed.d && Math.abs(sphereOffsetX) > 0.1) {
-      // Add smooth wobble to Y position with slower oscillation
-      const wobbleAmount = Math.sin(frameCount * 0.1) * wobbleStrength * Math.abs(sphereOffsetX) * 0.5;
-      sphere.position.y = originalSphereY + sphereOffsetY + wobbleAmount;
-    } else {
-      // Return Y to original position more smoothly and slowly
-      sphere.position.y = originalSphereY + sphereOffsetY;
-    }
+    // Apply smooth Y position without wobbling
+    sphere.position.y = originalSphereY + sphereOffsetY;
   }
 
   // Function to create cluster template
@@ -591,8 +596,14 @@
     sphere = new THREE.Mesh(sphereGeom, sphereMat);
     scene.add(sphere);
     
-    // Add rotation properties to sphere
+    // Add point light to the sphere
+    const pointLight = new THREE.PointLight(0xffff00, 1.5, 50, 2);
+    pointLight.position.copy(sphere.position);
+    scene.add(pointLight);
+    
+    // Add rotation properties to sphere and store point light reference
     sphere.userData = {
+      pointLight: pointLight,  // Store reference to point light for updates
       rotationSpeeds: {
         main: 0.005,    // Main sphere rotation speed
         glow: -0.003,   // Glow layer (opposite direction)
@@ -920,6 +931,11 @@
       }
       
       sphere.position.copy(targetPos);
+      
+      // Update point light position to follow sphere
+      if (sphere.userData.pointLight) {
+        sphere.userData.pointLight.position.copy(sphere.position);
+      }
 
       // Store original Y position for wobble effect (only once)
       if (originalSphereY === 0) {
@@ -934,6 +950,11 @@
       
       // Apply Y offset to sphere position
       sphere.position.y += sphereOffsetY;
+      
+      // Update point light position after manual movement
+      if (sphere.userData.pointLight) {
+        sphere.userData.pointLight.position.copy(sphere.position);
+      }
 
       // Move skybox to follow sphere (maintains constant distance)
       if (skybox) {
