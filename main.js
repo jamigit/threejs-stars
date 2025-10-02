@@ -46,6 +46,24 @@
   let frameRateHistory = [];
   let adaptiveQuality = 1.0; // Quality multiplier
   let lastFrameTime = 0;
+  
+  // Performance monitoring
+  let fpsCounter = 0;
+  let fpsHistory = [];
+  let lastFpsUpdate = 0;
+  let currentFps = 0;
+  let averageFps = 0;
+  let minFps = Infinity;
+  let maxFps = 0;
+  let performanceMetrics = {
+    totalFrameTime: 0,
+    renderTime: 0,
+    physicsTime: 0,
+    clusterUpdateTime: 0,
+    starCount: 0,
+    clusterCount: 0,
+    drawCalls: 0
+  };
 
   // Camera dampening variables
   let cameraTargetPosition = new THREE.Vector3();
@@ -557,6 +575,10 @@
     // Create skybox with starfield
     createSkybox();
 
+    // Initialize performance monitoring
+    const fpsDisplay = createFpsDisplay();
+    const performanceGraph = createPerformanceGraph();
+
     // Create glowing sphere
     const sphereGeom = new THREE.SphereGeometry(0.8, 32, 32);
     const sphereMat = new THREE.MeshStandardMaterial({
@@ -858,6 +880,9 @@
     const animate = () => {
       requestAnimationFrame(animate);
       
+      // Performance tracking
+      const frameStartTime = performance.now();
+      
       // Smooth acceleration/deceleration
       const acceleration = targetSpeed > speed ? 0.02 : 0.015;
       speed += (targetSpeed - speed) * acceleration;
@@ -952,23 +977,9 @@
           
           // Render this cluster if not already rendered (DYNAMIC LOD based on distance to orb)
           if (!cluster.rendered) {
-            // Dynamic LOD: Much higher star density when close to sphere
+            // Smart dynamic LOD: Adaptive star density based on performance
             const distToSphere = cluster.center.distanceTo(sphere.position);
-            let dynamicMultiplier;
-            
-            if (distToSphere < 15) {
-              dynamicMultiplier = 2.5; // 250% stars when very close to sphere
-            } else if (distToSphere < 25) {
-              dynamicMultiplier = 2.0; // 200% stars when close to sphere
-            } else if (distToSphere < 35) {
-              dynamicMultiplier = 1.5; // 150% stars when medium-close
-            } else if (distToSphere < 50) {
-              dynamicMultiplier = 1.0; // Full stars when medium distance
-            } else if (distToSphere < 70) {
-              dynamicMultiplier = 0.7; // 70% stars when far
-            } else {
-              dynamicMultiplier = 0.4; // 40% stars when very far
-            }
+            const dynamicMultiplier = getDynamicDensityMultiplier(distToSphere);
             
             const starCount = Math.max(30, Math.floor(cluster.stars.length * dynamicMultiplier * adaptiveQuality));
             
@@ -989,19 +1000,46 @@
             //   }
             // }
             
-            // Regular rendering with LOD + Object pooling (RE-ENABLED)
+            // Instanced rendering with LOD + Color grouping
             let meshesCreated = 0;
+            const colorGroups = new Map();
+            
+            // Group stars by color
             for (let i = 0; i < starCount; i++) {
               const starData = cluster.stars[i];
-              const starGeom = getGeometry(starData.size); // Re-enable object pooling
-              const starMat = getMaterial(starData.color); // Re-enable object pooling
-              const mesh = new THREE.Mesh(starGeom, starMat);
-              mesh.position.copy(starData.position);
-              scene.add(mesh);
-              starData.mesh = mesh;
-              meshesCreated++;
+              const colorKey = starData.color; // Use color string directly
+              
+              if (!colorGroups.has(colorKey)) {
+                colorGroups.set(colorKey, []);
+              }
+              colorGroups.get(colorKey).push(starData);
             }
+            
+            // Create instanced meshes for each color group
+            colorGroups.forEach((stars, colorKey) => {
+              const color = new THREE.Color(colorKey); // colorKey is already a hex string
+              const instancedMesh = createInstancedMesh(color, false); // Start with 3D meshes
+              
+              stars.forEach((starData, index) => {
+                if (index < MAX_INSTANCES_PER_MESH) {
+                  addStarToInstancedMesh(instancedMesh, starData, index);
+                  starData.instancedIndex = index;
+                  starData.instancedMesh = instancedMesh;
+                  meshesCreated++;
+                }
+              });
+              
+              instancedMesh.count = Math.min(stars.length, MAX_INSTANCES_PER_MESH);
+              scene.add(instancedMesh);
+            });
+            
             cluster.rendered = true;
+            cluster.instancedMeshes = Array.from(colorGroups.keys()).map(colorKey => {
+              return scene.children.find(child => 
+                child.isInstancedMesh && 
+                child.material.color.getHexString() === new THREE.Color(colorKey).getHexString()
+              );
+            });
             
             // Debug: Log cluster rendering
             if (frameCount % 30 === 0) {
@@ -1015,16 +1053,19 @@
           // Always apply gentle return force to all rendered stars (even when sphere is far away)
           if (cluster.rendered) {
             cluster.stars.forEach(starData => {
-              if (starData.mesh && starData.velocity.length() > 0.001) {
+              if (starData.velocity && starData.velocity.length() > 0.001) {
                 // Apply very gentle return force to slowly drift back to original position
                 const returnForce = new THREE.Vector3()
-                  .subVectors(starData.originalPos, starData.mesh.position)
+                  .subVectors(starData.originalPos, starData.position)
                   .multiplyScalar(0.001); // Very gentle drift back
                 starData.velocity.add(returnForce);
                 
                 // Apply velocity and damping
-                starData.mesh.position.add(starData.velocity);
+                starData.position.add(starData.velocity);
                 starData.velocity.multiplyScalar(0.998); // Very gentle damping
+                
+                // Update instanced mesh position
+                updateInstancedStarPosition(starData);
               }
             });
           }
@@ -1063,39 +1104,49 @@
         });
       }
       
-      // Find the cluster the sphere is currently interacting with (OPTIMIZED: Early exit + Exclusive interaction)
-      let currentCluster = null;
-      let minDist = Infinity;
+      // Find the 2 closest clusters the sphere can interact with
+      let currentClusters = [];
+      let clusterDistances = [];
       
       for (let i = 0; i < activeClusters.length; i++) {
         const cluster = activeClusters[i];
         const dist = cluster.center.distanceTo(sphere.position);
         
-        // Only consider clusters within interaction range (balanced for visibility and interaction)
-        if (dist < 20 && dist < minDist) {
-          minDist = dist;
-          currentCluster = cluster;
-          if (dist < 12) break; // Early exit if very close (balanced threshold)
+        // Only consider clusters within interaction range
+        if (dist < 20) {
+          clusterDistances.push({ cluster: cluster, distance: dist });
         }
       }
+      
+      // Sort by distance and take the 2 closest
+      clusterDistances.sort((a, b) => a.distance - b.distance);
+      currentClusters = clusterDistances.slice(0, 2).map(item => item.cluster);
 
-      // Only process the current cluster for physics
-      if (currentCluster) {
+      // Process physics for up to 2 clusters
+      if (currentClusters.length > 0) {
         // Debug: Log physics interaction
         if (frameCount % 30 === 0) {
-          console.log(`Physics active on cluster at distance: ${minDist.toFixed(1)}, Stars: ${currentCluster.stars.length}, Mode: ${physicsMode}`);
+          console.log(`Physics active on ${currentClusters.length} cluster(s), Mode: ${physicsMode}`);
+          currentClusters.forEach((cluster, index) => {
+            const dist = cluster.center.distanceTo(sphere.position);
+            console.log(`Cluster ${index + 1}: Distance: ${dist.toFixed(1)}, Stars: ${cluster.stars.length}`);
+          });
         }
           
-        // Update star physics based on mode (ONLY for current cluster - OPTIMIZED)
+        // Update star physics based on mode (for up to 2 clusters)
         if (physicsMode === 'standard') {
-            // Standard mode - only sphere pushes stars (OPTIMIZED: Only process nearby stars)
-          let starsProcessed = 0;
-          let starsPushed = 0;
+          // Standard mode - only sphere pushes stars
+          let totalStarsProcessed = 0;
+          let totalStarsPushed = 0;
           
-          currentCluster.stars.forEach(starData => {
-              if (!starData.mesh) return;
+          currentClusters.forEach(cluster => {
+            let starsProcessed = 0;
+            let starsPushed = 0;
+            
+            cluster.stars.forEach(starData => {
+              if (!starData.instancedMesh) return;
               
-              const dist = starData.mesh.position.distanceTo(sphere.position);
+              const dist = starData.position.distanceTo(sphere.position);
               const pushRadius = 16; // Reduced to 65% of original (25 * 0.65 = 16.25)
               
               // Only process stars within interaction range for better performance
@@ -1107,7 +1158,7 @@
                   const normalizedDist = dist / pushRadius;
                   const force = Math.pow(1 - normalizedDist, 2) * 0.8; // Increased force for stronger effect
                 const direction = new THREE.Vector3()
-                  .subVectors(starData.mesh.position, sphere.position)
+                  .subVectors(starData.position, sphere.position)
                   .normalize();
                 
                 starData.velocity.add(direction.multiplyScalar(force));
@@ -1120,27 +1171,46 @@
                 }
                 
                 // Apply physics only to nearby stars
-              starData.mesh.position.add(starData.velocity);
+                starData.position.add(starData.velocity);
                 starData.velocity.multiplyScalar(0.995); // Much gentler damping for smoother movement
+                
+                // Update instanced mesh position
+                updateInstancedStarPosition(starData);
               
               const returnForce = new THREE.Vector3()
-                .subVectors(starData.originalPos, starData.mesh.position)
+                .subVectors(starData.originalPos, starData.position)
                   .multiplyScalar(0.002); // Even gentler return force for very slow drift back
               starData.velocity.add(returnForce);
               }
             });
             
-            // Debug: Log physics processing
+            // Debug: Log physics processing for this cluster
             if (frameCount % 30 === 0) {
-              console.log(`Physics processed: ${starsProcessed} nearby stars, ${starsPushed} pushed`);
+              console.log(`Cluster physics: ${starsProcessed} nearby stars, ${starsPushed} pushed`);
             }
+            
+            totalStarsProcessed += starsProcessed;
+            totalStarsPushed += starsPushed;
+          });
+          
+          // Debug: Log total physics processing
+          if (frameCount % 30 === 0) {
+            console.log(`Total physics: ${totalStarsProcessed} stars processed, ${totalStarsPushed} pushed across ${currentClusters.length} clusters`);
+          }
           } else {
-          // Chain mode - stars push each other (OPTIMIZED: Only in current cluster)
-          currentCluster.stars.forEach(starData => {
-              if (!starData.mesh) return;
+          // Chain mode - stars push each other (for up to 2 clusters)
+          let totalStarsProcessed = 0;
+          let totalStarsPushed = 0;
+          
+          currentClusters.forEach(cluster => {
+            let starsProcessed = 0;
+            let starsPushed = 0;
+            
+            cluster.stars.forEach(starData => {
+              if (!starData.instancedMesh) return;
               
               // Sphere pushes stars
-              const dist = starData.mesh.position.distanceTo(sphere.position);
+              const dist = starData.position.distanceTo(sphere.position);
               const pushRadius = 16; // Reduced to 65% of original (25 * 0.65 = 16.25)
               
               if (dist < pushRadius) {
@@ -1148,31 +1218,31 @@
                 const normalizedDist = dist / pushRadius;
                 const force = Math.pow(1 - normalizedDist, 2) * 0.8; // Increased force for stronger effect
                 const direction = new THREE.Vector3()
-                  .subVectors(starData.mesh.position, sphere.position)
+                  .subVectors(starData.position, sphere.position)
                   .normalize();
                 
                 starData.velocity.add(direction.multiplyScalar(force));
               }
             });
             
-          // Stars push each other (OPTIMIZED: Only check moving stars and nearby stars)
-          currentCluster.stars.forEach((starData, idx) => {
-              if (!starData.mesh) return;
+            // Stars push each other (within this cluster)
+            cluster.stars.forEach((starData, idx) => {
+              if (!starData.instancedMesh) return;
               
             // Skip static stars to reduce collision checks
             if (starData.velocity.length() < 0.02) return; // Higher threshold for gentler interaction
             
-            currentCluster.stars.forEach((otherStar, otherIdx) => {
-                if (idx === otherIdx || !otherStar.mesh) return;
+            cluster.stars.forEach((otherStar, otherIdx) => {
+                if (idx === otherIdx || !otherStar.instancedMesh) return;
               
               // Spatial partitioning: Quick distance check using bounding box
-              const dx = Math.abs(starData.mesh.position.x - otherStar.mesh.position.x);
-              const dy = Math.abs(starData.mesh.position.y - otherStar.mesh.position.y);
-              const dz = Math.abs(starData.mesh.position.z - otherStar.mesh.position.z);
+              const dx = Math.abs(starData.position.x - otherStar.position.x);
+              const dy = Math.abs(starData.position.y - otherStar.position.y);
+              const dz = Math.abs(starData.position.z - otherStar.position.z);
               
               if (dx > 4 || dy > 4 || dz > 4) return; // Slightly larger interaction area
                 
-                const dist = starData.mesh.position.distanceTo(otherStar.mesh.position);
+                const dist = starData.position.distanceTo(otherStar.position);
                 const interactionRadius = 4; // Increased interaction radius
                 
                 if (dist < interactionRadius && dist > 0.1) {
@@ -1183,7 +1253,7 @@
                     const normalizedDist = dist / interactionRadius;
                     const force = Math.pow(1 - normalizedDist, 2) * velocityMagnitude * 0.2; // Increased force for stronger star interactions
                     const direction = new THREE.Vector3()
-                      .subVectors(otherStar.mesh.position, starData.mesh.position)
+                      .subVectors(otherStar.position, starData.position)
                       .normalize();
                     
                     otherStar.velocity.add(direction.multiplyScalar(force));
@@ -1192,19 +1262,31 @@
               });
             });
             
-            // Apply velocity and damping
-          currentCluster.stars.forEach(starData => {
-              if (!starData.mesh) return;
+            // Apply velocity and damping for this cluster
+            cluster.stars.forEach(starData => {
+              if (!starData.instancedMesh) return;
               
-              starData.mesh.position.add(starData.velocity);
+              starData.position.add(starData.velocity);
               starData.velocity.multiplyScalar(0.995); // Much gentler damping for smoother movement
               
+              // Update instanced mesh position
+              updateInstancedStarPosition(starData);
+              
               const returnForce = new THREE.Vector3()
-                .subVectors(starData.originalPos, starData.mesh.position)
+                .subVectors(starData.originalPos, starData.position)
                 .multiplyScalar(0.002); // Even gentler return force for very slow drift back
               starData.velocity.add(returnForce);
             });
+            
+            totalStarsProcessed += starsProcessed;
+            totalStarsPushed += starsPushed;
+          });
+          
+          // Debug: Log total chain mode physics
+          if (frameCount % 30 === 0) {
+            console.log(`Chain mode: ${totalStarsProcessed} stars processed, ${totalStarsPushed} pushed across ${currentClusters.length} clusters`);
           }
+        }
       }
 
 
@@ -1266,6 +1348,9 @@
       // Update adaptive quality based on frame rate
       updateAdaptiveQuality();
       
+      // Update smart density scaling based on performance
+      updateSmartDensityScaling();
+      
       // Update particle tail - thin tail
       updateTailParticles();
 
@@ -1282,11 +1367,48 @@
             renderedClusters++;
           }
         });
-        console.log(`Performance: Active clusters: ${activeClusters.length}, Rendered: ${renderedClusters}, Active stars: ${activeStars}, Geometry pool: ${geometryPool.length}, Material pool: ${materialPool.length}, Adaptive quality: ${adaptiveQuality.toFixed(2)}, Current cluster: ${currentCluster ? `Yes (dist: ${minDist.toFixed(1)})` : 'No'}`);
+        console.log(`Performance: Active clusters: ${activeClusters.length}, Rendered: ${renderedClusters}, Active stars: ${activeStars}, Geometry pool: ${geometryPool.length}, Material pool: ${materialPool.length}, Adaptive quality: ${adaptiveQuality.toFixed(2)}, Interacting clusters: ${currentClusters.length}`);
+        
+        // Update performance metrics
+        performanceMetrics.starCount = activeStars;
+        performanceMetrics.clusterCount = activeClusters.length;
       }
 
       frameCount++;
+      
+      // Performance tracking - render time
+      const renderStartTime = performance.now();
       renderer.render(scene, camera);
+      performanceMetrics.renderTime = performance.now() - renderStartTime;
+      
+      // Calculate FPS
+      const currentTime = performance.now();
+      const deltaTime = currentTime - lastFrameTime;
+      if (deltaTime > 0) {
+        currentFps = 1000 / deltaTime;
+        fpsHistory.push(currentFps);
+        
+        // Keep only last 60 frames for average
+        if (fpsHistory.length > 60) {
+          fpsHistory.shift();
+        }
+        
+        // Calculate average FPS
+        averageFps = fpsHistory.reduce((a, b) => a + b, 0) / fpsHistory.length;
+        
+        // Update min/max
+        minFps = Math.min(minFps, currentFps);
+        maxFps = Math.max(maxFps, currentFps);
+        
+        // Update displays every 10 frames
+        if (frameCount % 10 === 0) {
+          updateFpsDisplay(fpsDisplay);
+          updatePerformanceGraph(performanceGraph);
+        }
+      }
+      
+      lastFrameTime = currentTime;
+      performanceMetrics.totalFrameTime = currentTime - frameStartTime;
     };
     animate();
 
@@ -1307,6 +1429,332 @@
     const modeElement = document.getElementById('mode-display');
     if (modeElement) {
       modeElement.textContent = `Physics Mode: ${modeDisplay === 'standard' ? 'Standard' : 'Chain Reaction'}`;
+    }
+  }
+
+  // Performance monitoring functions
+  function createFpsDisplay() {
+    const fpsDiv = document.createElement('div');
+    fpsDiv.id = 'fps-display';
+    fpsDiv.style.cssText = `
+      position: fixed;
+      top: 10px;
+      left: 10px;
+      color: #00ff00;
+      font-family: monospace;
+      font-size: 14px;
+      background: rgba(0,0,0,0.8);
+      padding: 8px 12px;
+      border-radius: 4px;
+      border: 1px solid #333;
+      z-index: 1000;
+      min-width: 120px;
+    `;
+    document.body.appendChild(fpsDiv);
+    return fpsDiv;
+  }
+
+  function createPerformanceGraph() {
+    const canvas = document.createElement('canvas');
+    canvas.width = 300;
+    canvas.height = 150;
+    canvas.id = 'performance-graph';
+    canvas.style.cssText = `
+      position: fixed;
+      bottom: 10px;
+      right: 10px;
+      background: rgba(0,0,0,0.8);
+      border: 1px solid #333;
+      border-radius: 4px;
+      z-index: 1000;
+    `;
+    document.body.appendChild(canvas);
+    return canvas;
+  }
+
+  function updateFpsDisplay(fpsDiv) {
+    const statusColor = averageFps >= 55 ? '#00ff00' : averageFps >= 30 ? '#ffff00' : '#ff0000';
+    const statusText = averageFps >= 55 ? '● Excellent' : averageFps >= 30 ? '● Good' : '● Poor';
+    
+    fpsDiv.innerHTML = `
+      <div style="color: ${statusColor}; font-weight: bold;">FPS: ${currentFps.toFixed(1)}</div>
+      <div style="color: #ccc;">Avg: ${averageFps.toFixed(1)}</div>
+      <div style="color: #ccc;">Min: ${minFps.toFixed(1)}</div>
+      <div style="color: #ccc;">Max: ${maxFps.toFixed(1)}</div>
+      <div style="color: ${statusColor}; font-size: 12px;">${statusText}</div>
+    `;
+  }
+
+  function updatePerformanceGraph(canvas) {
+    const ctx = canvas.getContext('2d');
+    const width = canvas.width;
+    const height = canvas.height;
+    
+    // Clear canvas
+    ctx.fillStyle = 'rgba(0,0,0,0.8)';
+    ctx.fillRect(0, 0, width, height);
+    
+    // Draw grid lines
+    ctx.strokeStyle = '#333';
+    ctx.lineWidth = 1;
+    for (let i = 0; i <= 4; i++) {
+      const y = (height / 4) * i;
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(width, y);
+      ctx.stroke();
+    }
+    
+    // Draw FPS line
+    if (fpsHistory.length > 1) {
+      ctx.strokeStyle = '#00ff00';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      
+      const maxFps = Math.max(...fpsHistory);
+      const minFps = Math.min(...fpsHistory);
+      const fpsRange = maxFps - minFps || 1;
+      
+      fpsHistory.forEach((fps, index) => {
+        const x = (index / (fpsHistory.length - 1)) * width;
+        const y = height - ((fps - minFps) / fpsRange) * height;
+        
+        if (index === 0) {
+          ctx.moveTo(x, y);
+        } else {
+          ctx.lineTo(x, y);
+        }
+      });
+      
+      ctx.stroke();
+    }
+    
+    // Draw performance zones
+    ctx.fillStyle = 'rgba(0,255,0,0.1)';
+    ctx.fillRect(0, 0, width, height * 0.25); // 60+ FPS zone
+    
+    ctx.fillStyle = 'rgba(255,255,0,0.1)';
+    ctx.fillRect(0, height * 0.25, width, height * 0.5); // 30-60 FPS zone
+    
+    ctx.fillStyle = 'rgba(255,0,0,0.1)';
+    ctx.fillRect(0, height * 0.75, width, height * 0.25); // <30 FPS zone
+  }
+
+  function getPerformanceSuggestions() {
+    const suggestions = [];
+    
+    if (averageFps < 30) {
+      suggestions.push("Consider reducing star density multipliers");
+      suggestions.push("Enable instanced rendering for distant clusters");
+    }
+    
+    if (performanceMetrics.starCount > 5000) {
+      suggestions.push("High star count detected - consider LOD optimization");
+    }
+    
+    if (performanceMetrics.physicsTime > 5) {
+      suggestions.push("Physics calculations taking too long - reduce interaction radius");
+    }
+    
+    if (performanceMetrics.renderTime > 10) {
+      suggestions.push("Rendering performance low - consider 2D sprites for distant stars");
+    }
+    
+    if (densityScalingEnabled && averageFps < performanceTargetFPS) {
+      suggestions.push(`Smart scaling active: Target ${performanceTargetFPS} FPS, Current ${averageFps.toFixed(1)} FPS`);
+    }
+    
+    return suggestions;
+  }
+
+  // Smart density scaling system
+  let densityScalingEnabled = true;
+  let baseDensityMultipliers = [2.5, 2.0, 1.5, 1.0, 0.7, 0.4]; // Base multipliers for different distances
+  let currentDensityMultipliers = [...baseDensityMultipliers]; // Current active multipliers
+  let performanceTargetFPS = 55; // Target FPS for quality scaling
+  let densityUpdateCounter = 0;
+  const DENSITY_UPDATE_INTERVAL = 60; // Update density every 60 frames
+  
+  function updateSmartDensityScaling() {
+    if (!densityScalingEnabled) return;
+    
+    densityUpdateCounter++;
+    if (densityUpdateCounter < DENSITY_UPDATE_INTERVAL) return;
+    densityUpdateCounter = 0;
+    
+    // Calculate performance ratio
+    const performanceRatio = averageFps / performanceTargetFPS;
+    
+    // Adjust density multipliers based on performance
+    if (performanceRatio < 0.8) {
+      // Performance is poor, reduce density
+      currentDensityMultipliers = currentDensityMultipliers.map(multiplier => 
+        Math.max(multiplier * 0.9, 0.1) // Reduce by 10%, minimum 0.1
+      );
+      
+      if (frameCount % 60 === 0) {
+        console.log(`Performance low (${averageFps.toFixed(1)} FPS), reducing density multipliers`);
+      }
+    } else if (performanceRatio > 1.2) {
+      // Performance is good, can increase density
+      currentDensityMultipliers = currentDensityMultipliers.map((multiplier, index) => 
+        Math.min(multiplier * 1.05, baseDensityMultipliers[index]) // Increase by 5%, max to base
+      );
+      
+      if (frameCount % 60 === 0) {
+        console.log(`Performance good (${averageFps.toFixed(1)} FPS), increasing density multipliers`);
+      }
+    }
+    
+    // Debug: Log current multipliers
+    if (frameCount % 120 === 0) {
+      console.log(`Density multipliers: [${currentDensityMultipliers.map(m => m.toFixed(2)).join(', ')}]`);
+    }
+  }
+
+  function getDynamicDensityMultiplier(distToSphere) {
+    if (!densityScalingEnabled) {
+      // Use original logic if smart scaling is disabled
+      if (distToSphere < 15) return 2.5;
+      if (distToSphere < 25) return 2.0;
+      if (distToSphere < 35) return 1.5;
+      if (distToSphere < 50) return 1.0;
+      if (distToSphere < 70) return 0.7;
+      return 0.4;
+    }
+    
+    // Use smart scaling multipliers
+    if (distToSphere < 15) return currentDensityMultipliers[0];
+    if (distToSphere < 25) return currentDensityMultipliers[1];
+    if (distToSphere < 35) return currentDensityMultipliers[2];
+    if (distToSphere < 50) return currentDensityMultipliers[3];
+    if (distToSphere < 70) return currentDensityMultipliers[4];
+    return currentDensityMultipliers[5];
+  }
+
+  // Color-based instanced rendering system
+  let colorGroups = new Map(); // Map of color -> InstancedMesh
+  let instancedMeshes = new Map(); // Map of color -> InstancedMesh for 3D stars
+  let instancedSprites = new Map(); // Map of color -> InstancedMesh for 2D sprites
+  const MAX_INSTANCES_PER_MESH = 1000; // Maximum instances per InstancedMesh
+  
+  // Hybrid rendering system
+  function createStarSpriteTexture(starData) {
+    const canvas = document.createElement('canvas');
+    canvas.width = 16;
+    canvas.height = 16;
+    const ctx = canvas.getContext('2d');
+    
+    // Use star data to create consistent but varied shapes
+    const seed = starData.position.x + starData.position.y + starData.position.z;
+    const seededRandom = (s) => {
+      s = Math.sin(s) * 10000;
+      return s - Math.floor(s);
+    };
+    
+    // Create irregular star shape with 6-8 edges
+    const centerX = 8;
+    const centerY = 8;
+    const numPoints = 6 + Math.floor(seededRandom(seed) * 3); // 6-8 points
+    const baseRadius = 4 + starData.size * 4; // Size-based radius
+    const variation = 1.5; // Random variation in radius
+    
+    ctx.beginPath();
+    
+    for (let i = 0; i < numPoints; i++) {
+      const angle = (i / numPoints) * Math.PI * 2;
+      const radius = baseRadius + (seededRandom(seed + i) - 0.5) * variation;
+      const x = centerX + Math.cos(angle) * radius;
+      const y = centerY + Math.sin(angle) * radius;
+      
+      if (i === 0) {
+        ctx.moveTo(x, y);
+      } else {
+        ctx.lineTo(x, y);
+      }
+    }
+    
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(255,255,255,1)';
+    ctx.fill();
+    
+    const texture = new THREE.CanvasTexture(canvas);
+    return texture;
+  }
+
+  function shouldUseSprite(distanceFromCamera) {
+    return distanceFromCamera > 20; // Use sprites for distant stars
+  }
+
+  function updateInstancedStarPosition(starData) {
+    if (starData.instancedMesh && starData.instancedIndex !== undefined) {
+      const matrix = new THREE.Matrix4();
+      const scale = starData.size * (shouldUseSprite(starData.position.distanceTo(camera.position)) ? 6 : 1);
+      
+      matrix.compose(
+        starData.position,
+        new THREE.Quaternion(),
+        new THREE.Vector3(scale, scale, scale)
+      );
+      
+      starData.instancedMesh.setMatrixAt(starData.instancedIndex, matrix);
+      starData.instancedMesh.instanceMatrix.needsUpdate = true;
+    }
+  }
+
+  function createInstancedMesh(color, isSprite = false) {
+    const geometry = isSprite ? 
+      new THREE.PlaneGeometry(1, 1) : // For sprites, use plane geometry
+      new THREE.SphereGeometry(0.1, 8, 6); // For 3D stars, use small sphere
+    
+    const material = isSprite ?
+      new THREE.MeshBasicMaterial({
+        map: createStarSpriteTexture({ color: color, size: 0.1, position: new THREE.Vector3() }),
+        transparent: true,
+        alphaTest: 0.05
+      }) :
+      getMaterial(color);
+    
+    const instancedMesh = new THREE.InstancedMesh(geometry, material, MAX_INSTANCES_PER_MESH);
+    instancedMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    return instancedMesh;
+  }
+
+  function addStarToInstancedMesh(instancedMesh, starData, index) {
+    const matrix = new THREE.Matrix4();
+    const scale = starData.size * (shouldUseSprite(starData.position.distanceTo(camera.position)) ? 6 : 1);
+    
+    matrix.compose(
+      starData.position,
+      new THREE.Quaternion(),
+      new THREE.Vector3(scale, scale, scale)
+    );
+    
+    instancedMesh.setMatrixAt(index, matrix);
+    instancedMesh.instanceMatrix.needsUpdate = true;
+  }
+
+  function createStarMesh(starData, distanceFromCamera) {
+    // For now, keep individual meshes for compatibility
+    // TODO: Convert to instanced rendering
+    if (shouldUseSprite(distanceFromCamera)) {
+      // Create 2D sprite with unique texture
+      const spriteTexture = createStarSpriteTexture(starData);
+      const spriteMaterial = new THREE.SpriteMaterial({
+        map: spriteTexture,
+        color: starData.color,
+        transparent: true,
+        alphaTest: 0.05
+      });
+      const sprite = new THREE.Sprite(spriteMaterial);
+      sprite.scale.set(starData.size * 6, starData.size * 6, 1);
+      return sprite;
+    } else {
+      // Create 3D sphere
+      const starGeom = getGeometry(starData.size);
+      const starMat = getMaterial(starData.color);
+      const mesh = new THREE.Mesh(starGeom, starMat);
+      return mesh;
     }
   }
 
