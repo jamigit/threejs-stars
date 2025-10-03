@@ -31,7 +31,7 @@
   // Particle tail system - red and orange particle tail
   let tailParticles = [];
   let maxTailParticles = 200; // Increased for wider tail
-  let tailParticleGeometry = new THREE.SphereGeometry(0.12, 12, 12); // Much larger particles for better visibility
+  let tailParticleGeometry = new THREE.SphereGeometry(0.24, 12, 12); // Much larger particles for better visibility
   let tailColors = [0xff0000, 0xff4400]; // Red and orange colors
   
   // Additional performance optimizations
@@ -50,6 +50,28 @@
   let frameRateHistory = [];
   let adaptiveQuality = 1.0; // Quality multiplier
   let lastFrameTime = 0;
+  
+  // Distance-based effects optimization variables
+  let physicsUpdateCounter = 0;
+  const PHYSICS_UPDATE_INTERVAL = 1; // Update physics every frame for responsiveness
+  let starUpdateIndex = 0; // For staggered star updates
+  const STARS_PER_FRAME = 50; // Process this many stars per frame for staggered updates
+  
+  // Star size categories for mass-based physics
+  const STAR_SIZE_CATEGORIES = {
+    SMALL: { min: 0.075, max: 0.2, mass: 3.0, name: 'small' },
+    MEDIUM: { min: 0.2, max: 0.4, mass: 4.5, name: 'medium' },
+    LARGE: { min: 0.4, max: 0.6, mass: 6.5, name: 'large' },
+    GIANT: { min: 0.6, max: 0.825, mass: 10.0, name: 'giant' }
+  };
+  
+  // Pre-calculated inverse masses for faster physics calculations (UPDATED for new mass values)
+  const INVERSE_MASSES = {
+    SMALL: 0.333,  // 1/3.0 = 0.333
+    MEDIUM: 0.222, // 1/4.5 = 0.222
+    LARGE: 0.154,  // 1/6.5 = 0.154
+    GIANT: 0.1     // 1/10.0 = 0.1
+  };
   
   // Performance monitoring
   let fpsCounter = 0;
@@ -82,6 +104,34 @@
   let sphereVelocityY = 0; // Y velocity for smooth movement
   let keysPressed = { a: false, d: false, w: false, s: false }; // Track which keys are pressed
   let originalSphereY = 0; // Store original Y position for wobble effect
+
+  // Star size categorization and mass-based physics functions
+  function getStarSizeCategory(size) {
+    if (size >= STAR_SIZE_CATEGORIES.GIANT.min) return 'GIANT';
+    if (size >= STAR_SIZE_CATEGORIES.LARGE.min) return 'LARGE';
+    if (size >= STAR_SIZE_CATEGORIES.MEDIUM.min) return 'MEDIUM';
+    return 'SMALL';
+  }
+  
+  function categorizeStarsBySize(cluster) {
+    const categorizedStars = {
+      SMALL: [],
+      MEDIUM: [],
+      LARGE: [],
+      GIANT: []
+    };
+    
+    cluster.stars.forEach(starData => {
+      if (starData.instancedMesh) {
+        const category = getStarSizeCategory(starData.size);
+        starData.sizeCategory = category;
+        starData.inverseMass = INVERSE_MASSES[category];
+        categorizedStars[category].push(starData);
+      }
+    });
+    
+    return categorizedStars;
+  }
 
   // Function to update particle tail - red and orange particle tail
   function updateTailParticles() {
@@ -269,7 +319,7 @@
       }
       
       for (let j = 0; j < starCount; j++) {
-        const size = getRandom() * 0.375 + 0.0375; // Size variety: 0.0375 to 0.4125 (0.75x to 2.5x current range)
+        const size = getRandom() * 0.75 + 0.075; // Size variety: 0.075 to 0.825 (doubled from 0.0375 to 0.4125)
         const color = starColors[Math.floor(getRandom() * starColors.length)];
         
         // Probabilistically choose a density center based on its density weight
@@ -338,7 +388,7 @@
     if (distanceFromSphere < 40) return null; // Only for distant clusters
     
     const starCount = Math.min(cluster.stars.length, 300); // Increased limit from 200 to 300
-    const geometry = new THREE.SphereGeometry(0.1, 6, 6); // Lower quality
+    const geometry = new THREE.SphereGeometry(0.2, 6, 6); // Lower quality
     const material = new THREE.MeshStandardMaterial({
       emissive: 0xffffff,
       emissiveIntensity: 0.2
@@ -432,8 +482,8 @@
       stars: [],
       rendered: false,
       id: Math.random(),
-      // Rotation properties
-      rotationSpeed: (Math.random() - 0.5) * 0.0035, // Random rotation speed between -0.00175 and 0.00175 (half of original)
+      // Rotation properties - MUCH SLOWER rotation
+      rotationSpeed: (Math.random() - 0.5) * 0.000005, // Random rotation speed between -0.00025 and 0.00025 (much slower)
       rotationAxis: new THREE.Vector3(
         Math.random() - 0.5,
         Math.random() - 0.5,
@@ -534,6 +584,8 @@
   }
 
   function init() {
+
+    // REMOVED: Force lookup initialization - was causing performance issues
 
     // Seeded random number generator
     const seed = Math.random() * 10000;
@@ -1070,47 +1122,38 @@
             applyFakePhysics(cluster, distToCluster);
           }
           
-          // Apply gentle return force only to significantly displaced stars
-          if (cluster.rendered) {
-            cluster.stars.forEach(starData => {
-              if (starData.velocity && starData.velocity.length() > 0.001) {
-                const displacement = starData.position.distanceTo(starData.originalPos);
-                if (displacement > 1.5) { // Only return if significantly displaced
-                  // Apply very gentle return force to slowly drift back to original position
-                  const returnForce = new THREE.Vector3()
-                    .subVectors(starData.originalPos, starData.position)
-                    .multiplyScalar(0.0003); // Much gentler drift back
-                  starData.velocity.add(returnForce);
-                }
-                
-                // Apply velocity and damping
-                starData.position.add(starData.velocity);
-                starData.velocity.multiplyScalar(0.998); // Very gentle damping
-                
-                // Update instanced mesh position
-                updateInstancedStarPosition(starData);
-              }
-            });
-          }
+          // OLD PHYSICS DISABLED - Now handled by optimized physics system below
+          // This old physics code was interfering with the new optimized system
           
-          // Apply slow rotation to cluster
+          // Apply slow rotation to cluster (UPDATED for instanced mesh system)
           if (cluster.rendered && cluster.stars.length > 0) {
             cluster.rotationAngle += cluster.rotationSpeed;
             
             // Create rotation matrix
             const rotationMatrix = new THREE.Matrix4().makeRotationAxis(cluster.rotationAxis, cluster.rotationAngle);
             
-            // Apply rotation to all star meshes
+            // Apply rotation to all stars (both mesh and instancedMesh)
             cluster.stars.forEach(starData => {
               if (starData.mesh) {
+                // Legacy mesh rotation (for compatibility)
+                const relativePos = starData.position.clone().sub(cluster.center);
+                relativePos.applyMatrix4(rotationMatrix);
+                starData.mesh.position.copy(cluster.center.clone().add(relativePos));
+              }
+              
+              if (starData.instancedMesh) {
+                // Update instanced mesh rotation
                 // Get relative position from cluster center
                 const relativePos = starData.position.clone().sub(cluster.center);
                 
                 // Apply rotation
                 relativePos.applyMatrix4(rotationMatrix);
                 
-                // Set new position
-                starData.mesh.position.copy(cluster.center.clone().add(relativePos));
+                // Update the star's position
+                starData.position.copy(cluster.center.clone().add(relativePos));
+                
+                // Update instanced mesh position
+                updateInstancedStarPosition(starData);
               }
             });
           }
@@ -1127,22 +1170,24 @@
         });
       }
       
-      // Find the 2 closest clusters the sphere can interact with
+      // Find the 2 closest clusters the sphere can interact with (OPTIMIZED)
       let currentClusters = [];
       let clusterDistances = [];
+      const maxInteractionDistance = 20;
+      const maxInteractionDistanceSquared = maxInteractionDistance * maxInteractionDistance;
       
       for (let i = 0; i < activeClusters.length; i++) {
         const cluster = activeClusters[i];
-        const dist = cluster.center.distanceTo(sphere.position);
+        const distSquared = cluster.center.distanceToSquared(sphere.position);
         
-        // Only consider clusters within interaction range
-        if (dist < 20) {
-          clusterDistances.push({ cluster: cluster, distance: dist });
+        // Only consider clusters within interaction range (use squared distance)
+        if (distSquared < maxInteractionDistanceSquared) {
+          clusterDistances.push({ cluster: cluster, distanceSquared: distSquared });
         }
       }
       
       // Sort by distance and take the 2 closest
-      clusterDistances.sort((a, b) => a.distance - b.distance);
+      clusterDistances.sort((a, b) => a.distanceSquared - b.distanceSquared);
       currentClusters = clusterDistances.slice(0, 2).map(item => item.cluster);
 
       // Process physics for up to 2 clusters
@@ -1156,166 +1201,189 @@
           });
         }
           
-        // Update star physics based on mode (for up to 2 clusters)
+        // Update star physics based on mode (MASS-BASED with size categories)
         if (physicsMode === 'standard') {
-          // Standard mode - only sphere pushes stars
+          // Standard mode - mass-based sphere force field
           let totalStarsProcessed = 0;
           let totalStarsPushed = 0;
           
           currentClusters.forEach(cluster => {
-            let starsProcessed = 0;
-            let starsPushed = 0;
+            const pushRadius = 16;
+            const pushRadiusSquared = pushRadius * pushRadius;
             
-            cluster.stars.forEach(starData => {
-              if (!starData.instancedMesh) return;
+            // Categorize stars by size for optimized processing
+            const categorizedStars = categorizeStarsBySize(cluster);
+            
+            // Process each size category with appropriate mass-based physics
+            Object.keys(categorizedStars).forEach(category => {
+              const stars = categorizedStars[category];
+              const inverseMass = INVERSE_MASSES[category];
               
-              const dist = starData.position.distanceTo(sphere.position);
-              const pushRadius = 16; // Reduced to 65% of original (25 * 0.65 = 16.25)
-              
-              // Only process stars within interaction range for better performance
-              if (dist < pushRadius * 2) { // Process stars within 2x push radius
-                starsProcessed++;
-              
-              if (dist < pushRadius) {
-                  // Much gentler force calculation with smoother falloff
-                  const normalizedDist = dist / pushRadius;
-                  const force = Math.pow(1 - normalizedDist, 2) * 0.8; // Increased force for stronger effect
-                const direction = new THREE.Vector3()
-                  .subVectors(starData.position, sphere.position)
-                  .normalize();
+              stars.forEach(starData => {
+                // Use distanceSquared for performance
+                const distSquared = starData.position.distanceToSquared(sphere.position);
                 
-                starData.velocity.add(direction.multiplyScalar(force));
-                  starsPushed++;
+                if (distSquared < pushRadiusSquared) {
+                  // Calculate force with mass consideration
+                  const dist = Math.sqrt(distSquared);
+                  const normalizedDist = dist / pushRadius;
+                  const baseForce = Math.pow(1 - normalizedDist, 2) * 0.8;
                   
-                  // Debug: Log when stars are being pushed
-                  if (frameCount % 30 === 0 && force > 0.05) {
-                    console.log(`Pushing star! Force: ${force.toFixed(3)}, Distance: ${dist.toFixed(1)}`);
-                  }
+                  // Apply inverse mass - bigger stars move less!
+                  const massAdjustedForce = baseForce * inverseMass;
+                  
+                  const direction = new THREE.Vector3()
+                    .subVectors(starData.position, sphere.position)
+                    .normalize();
+                  
+                  starData.velocity.add(direction.multiplyScalar(massAdjustedForce));
+                  totalStarsPushed++;
                 }
                 
-                // Apply physics only to nearby stars
+                // Apply physics updates with mass-based damping
                 starData.position.add(starData.velocity);
-                starData.velocity.multiplyScalar(0.995); // Much gentler damping for smoother movement
+                // Heavier stars have less damping (more momentum)
+                const dampingFactor = 0.995 + (1 - inverseMass) * 0.002;
+                starData.velocity.multiplyScalar(dampingFactor);
                 
                 // Update instanced mesh position
                 updateInstancedStarPosition(starData);
-              
-              // Only apply return force if star is significantly displaced and not actively being pushed
-              const displacement = starData.position.distanceTo(starData.originalPos);
-              if (displacement > 2.0 && dist > pushRadius * 1.5) { // Only return if far from original and not near sphere
-                const returnForce = new THREE.Vector3()
-                  .subVectors(starData.originalPos, starData.position)
-                  .multiplyScalar(0.0005); // Much weaker return force
-                starData.velocity.add(returnForce);
-              }
-              }
+                
+                // Mass-based return force
+                const displacementSquared = starData.position.distanceToSquared(starData.originalPos);
+                if (displacementSquared > 4.0 && distSquared > pushRadiusSquared * 2.25) {
+                  const displacement = Math.sqrt(displacementSquared);
+                  const returnForce = new THREE.Vector3()
+                    .subVectors(starData.originalPos, starData.position)
+                    .multiplyScalar(0.0005 * inverseMass); // Heavier stars resist return force more
+                  starData.velocity.add(returnForce);
+                }
+                
+                totalStarsProcessed++;
+              });
             });
-            
-            // Debug: Log physics processing for this cluster
-            if (frameCount % 30 === 0) {
-              console.log(`Cluster physics: ${starsProcessed} nearby stars, ${starsPushed} pushed`);
-            }
-            
-            totalStarsProcessed += starsProcessed;
-            totalStarsPushed += starsPushed;
           });
           
-          // Debug: Log total physics processing
-          if (frameCount % 30 === 0) {
-            console.log(`Total physics: ${totalStarsProcessed} stars processed, ${totalStarsPushed} pushed across ${currentClusters.length} clusters`);
+          // Enhanced debug logging with size categories
+          if (frameCount % 60 === 0) {
+            console.log(`Physics: ${totalStarsProcessed} stars, ${totalStarsPushed} pushed`);
+            
+            // Log size category distribution and rotation info
+            if (currentClusters.length > 0) {
+              const cluster = currentClusters[0];
+              const categorizedStars = categorizeStarsBySize(cluster);
+              console.log(`Size categories: Small: ${categorizedStars.SMALL.length}, Medium: ${categorizedStars.MEDIUM.length}, Large: ${categorizedStars.LARGE.length}, Giant: ${categorizedStars.GIANT.length}`);
+              console.log(`Cluster rotation: Speed: ${cluster.rotationSpeed.toFixed(4)}, Angle: ${cluster.rotationAngle.toFixed(2)}`);
+            }
           }
-          } else {
-          // Chain mode - stars push each other (for up to 2 clusters)
+        } else {
+          // Chain mode - mass-based with size categories
           let totalStarsProcessed = 0;
           let totalStarsPushed = 0;
           
           currentClusters.forEach(cluster => {
-            let starsProcessed = 0;
-            let starsPushed = 0;
+            const pushRadius = 16;
+            const pushRadiusSquared = pushRadius * pushRadius;
+            const interactionRadius = 4;
+            const interactionRadiusSquared = interactionRadius * interactionRadius;
             
-            cluster.stars.forEach(starData => {
-              if (!starData.instancedMesh) return;
-              
-              // Sphere pushes stars
-              const dist = starData.position.distanceTo(sphere.position);
-              const pushRadius = 16; // Reduced to 65% of original (25 * 0.65 = 16.25)
-              
-              if (dist < pushRadius) {
-                // Much gentler force calculation with smoother falloff
-                const normalizedDist = dist / pushRadius;
-                const force = Math.pow(1 - normalizedDist, 2) * 0.8; // Increased force for stronger effect
-                const direction = new THREE.Vector3()
-                  .subVectors(starData.position, sphere.position)
-                  .normalize();
-                
-                starData.velocity.add(direction.multiplyScalar(force));
-              }
-            });
+            // Categorize stars by size
+            const categorizedStars = categorizeStarsBySize(cluster);
             
-            // Stars push each other (within this cluster)
-            cluster.stars.forEach((starData, idx) => {
-              if (!starData.instancedMesh) return;
+            // Sphere pushes stars (mass-based)
+            Object.keys(categorizedStars).forEach(category => {
+              const stars = categorizedStars[category];
+              const inverseMass = INVERSE_MASSES[category];
               
-            // Skip static stars to reduce collision checks
-            if (starData.velocity.length() < 0.02) return; // Higher threshold for gentler interaction
-            
-            cluster.stars.forEach((otherStar, otherIdx) => {
-                if (idx === otherIdx || !otherStar.instancedMesh) return;
-              
-              // Spatial partitioning: Quick distance check using bounding box
-              const dx = Math.abs(starData.position.x - otherStar.position.x);
-              const dy = Math.abs(starData.position.y - otherStar.position.y);
-              const dz = Math.abs(starData.position.z - otherStar.position.z);
-              
-              if (dx > 4 || dy > 4 || dz > 4) return; // Slightly larger interaction area
+              stars.forEach(starData => {
+                const distSquared = starData.position.distanceToSquared(sphere.position);
                 
-                const dist = starData.position.distanceTo(otherStar.position);
-                const interactionRadius = 4; // Increased interaction radius
-                
-                if (dist < interactionRadius && dist > 0.1) {
-                  const velocityMagnitude = starData.velocity.length();
+                if (distSquared < pushRadiusSquared) {
+                  const dist = Math.sqrt(distSquared);
+                  const normalizedDist = dist / pushRadius;
+                  const baseForce = Math.pow(1 - normalizedDist, 2) * 0.8;
+                  const massAdjustedForce = baseForce * inverseMass;
                   
-                  if (velocityMagnitude > 0.02) { // Higher threshold for gentler interaction
-                    // Gentler force calculation with smoother falloff
-                    const normalizedDist = dist / interactionRadius;
-                    const force = Math.pow(1 - normalizedDist, 2) * velocityMagnitude * 0.2; // Increased force for stronger star interactions
-                    const direction = new THREE.Vector3()
-                      .subVectors(otherStar.position, starData.position)
-                      .normalize();
-                    
-                    otherStar.velocity.add(direction.multiplyScalar(force));
-                  }
+                  const direction = new THREE.Vector3()
+                    .subVectors(starData.position, sphere.position)
+                    .normalize();
+                  
+                  starData.velocity.add(direction.multiplyScalar(massAdjustedForce));
+                  totalStarsPushed++;
                 }
               });
             });
             
-            // Apply velocity and damping for this cluster
-            cluster.stars.forEach(starData => {
-              if (!starData.instancedMesh) return;
+            // Mass-based star-to-star interactions
+            Object.keys(categorizedStars).forEach(category => {
+              const stars = categorizedStars[category];
+              const inverseMass = INVERSE_MASSES[category];
               
-              starData.position.add(starData.velocity);
-              starData.velocity.multiplyScalar(0.995); // Much gentler damping for smoother movement
-              
-              // Update instanced mesh position
-              updateInstancedStarPosition(starData);
-              
-              // Only apply return force if star is significantly displaced
-              const displacement = starData.position.distanceTo(starData.originalPos);
-              if (displacement > 2.0) { // Only return if far from original position
-                const returnForce = new THREE.Vector3()
-                  .subVectors(starData.originalPos, starData.position)
-                  .multiplyScalar(0.0005); // Much weaker return force
-                starData.velocity.add(returnForce);
-              }
+              stars.forEach((starData, idx) => {
+                if (starData.velocity.length() < 0.02) return;
+                
+                // Check interactions with all other stars
+                cluster.stars.forEach((otherStar, otherIdx) => {
+                  if (idx === otherIdx || !otherStar.instancedMesh) return;
+                  
+                  // Early culling
+                  const dx = Math.abs(starData.position.x - otherStar.position.x);
+                  const dy = Math.abs(starData.position.y - otherStar.position.y);
+                  const dz = Math.abs(starData.position.z - otherStar.position.z);
+                  
+                  if (dx > interactionRadius || dy > interactionRadius || dz > interactionRadius) {
+                    return;
+                  }
+                  
+                  const distSquared = starData.position.distanceToSquared(otherStar.position);
+                  
+                  if (distSquared < interactionRadiusSquared && distSquared > 0.01) {
+                    const velocityMagnitude = starData.velocity.length();
+                    
+                    if (velocityMagnitude > 0.02) {
+                      const dist = Math.sqrt(distSquared);
+                      const normalizedDist = dist / interactionRadius;
+                      const baseForce = Math.pow(1 - normalizedDist, 2) * velocityMagnitude * 0.2;
+                      
+                      // Mass-based interaction - heavier stars push lighter ones more
+                      const otherInverseMass = otherStar.inverseMass || INVERSE_MASSES[otherStar.sizeCategory];
+                      const massAdjustedForce = baseForce * (inverseMass / otherInverseMass);
+                      
+                      const direction = new THREE.Vector3()
+                        .subVectors(otherStar.position, starData.position)
+                        .normalize();
+                      
+                      otherStar.velocity.add(direction.multiplyScalar(massAdjustedForce));
+                    }
+                  }
+                });
+                
+                // Apply physics updates with mass-based damping
+                starData.position.add(starData.velocity);
+                const dampingFactor = 0.995 + (1 - inverseMass) * 0.002;
+                starData.velocity.multiplyScalar(dampingFactor);
+                
+                // Update instanced mesh position
+                updateInstancedStarPosition(starData);
+                
+                // Mass-based return force
+                const displacementSquared = starData.position.distanceToSquared(starData.originalPos);
+                if (displacementSquared > 4.0) {
+                  const displacement = Math.sqrt(displacementSquared);
+                  const returnForce = new THREE.Vector3()
+                    .subVectors(starData.originalPos, starData.position)
+                    .multiplyScalar(0.0005 * inverseMass);
+                  starData.velocity.add(returnForce);
+                }
+                
+                totalStarsProcessed++;
+              });
             });
-            
-            totalStarsProcessed += starsProcessed;
-            totalStarsPushed += starsPushed;
           });
           
-          // Debug: Log total chain mode physics
-          if (frameCount % 30 === 0) {
-            console.log(`Chain mode: ${totalStarsProcessed} stars processed, ${totalStarsPushed} pushed across ${currentClusters.length} clusters`);
+          // Minimal debug logging
+          if (frameCount % 60 === 0) {
+            console.log(`Chain mode: ${totalStarsProcessed} stars, ${totalStarsPushed} pushed`);
           }
         }
       }
@@ -1736,7 +1804,7 @@
   function createInstancedMesh(color, isSprite = false) {
     const geometry = isSprite ? 
       new THREE.PlaneGeometry(1, 1) : // For sprites, use plane geometry
-      new THREE.SphereGeometry(0.1, 8, 6); // For 3D stars, use small sphere
+      new THREE.SphereGeometry(0.2, 8, 6); // For 3D stars, use small sphere
     
     const material = isSprite ?
       new THREE.MeshBasicMaterial({
