@@ -663,12 +663,14 @@
       rotationSpeeds: {
         main: 0.005,    // Main sphere rotation speed
         glow: -0.003,   // Glow layer (opposite direction)
-        wave: 0.008     // Wave layer (different speed)
+        wave: 0.008,    // Wave layer (different speed)
+        forceField: 0.002 // Force field visualization (slow rotation)
       },
       rotationAxes: {
         main: new THREE.Vector3(0, 1, 0),     // Y-axis rotation
         glow: new THREE.Vector3(1, 0, 0),    // X-axis rotation
-        wave: new THREE.Vector3(0, 0, 1)     // Z-axis rotation
+        wave: new THREE.Vector3(0, 0, 1),    // Z-axis rotation
+        forceField: new THREE.Vector3(1, 1, 0).normalize() // Diagonal rotation
       }
     };
 
@@ -699,6 +701,20 @@
     const wave = new THREE.Mesh(waveGeom, waveMat);
     wave.userData = { layerType: 'wave' };
     sphere.add(wave);
+
+    // Force field visualization sphere
+    const forceFieldGeom = new THREE.SphereGeometry(12, 32, 32); // Radius matches pushRadius
+    const forceFieldMat = new THREE.MeshStandardMaterial({
+      color: 0x00ffff, // Cyan
+      transparent: true,
+      opacity: 0.15, // Increased from 0.05
+      wireframe: true,
+      emissive: 0x00ffff,
+      emissiveIntensity: 0.3 // Increased from 0.1
+    });
+    const forceField = new THREE.Mesh(forceFieldGeom, forceFieldMat);
+    forceField.userData = { layerType: 'forceField' };
+    sphere.add(forceField);
 
     // Pre-create fixed path using seed with smooth inertia-based movement
     const startZ = 0;
@@ -1125,38 +1141,7 @@
           // OLD PHYSICS DISABLED - Now handled by optimized physics system below
           // This old physics code was interfering with the new optimized system
           
-          // Apply slow rotation to cluster (UPDATED for instanced mesh system)
-          if (cluster.rendered && cluster.stars.length > 0) {
-            cluster.rotationAngle += cluster.rotationSpeed;
-            
-            // Create rotation matrix
-            const rotationMatrix = new THREE.Matrix4().makeRotationAxis(cluster.rotationAxis, cluster.rotationAngle);
-            
-            // Apply rotation to all stars (both mesh and instancedMesh)
-            cluster.stars.forEach(starData => {
-              if (starData.mesh) {
-                // Legacy mesh rotation (for compatibility)
-                const relativePos = starData.position.clone().sub(cluster.center);
-                relativePos.applyMatrix4(rotationMatrix);
-                starData.mesh.position.copy(cluster.center.clone().add(relativePos));
-              }
-              
-              if (starData.instancedMesh) {
-                // Update instanced mesh rotation
-                // Get relative position from cluster center
-                const relativePos = starData.position.clone().sub(cluster.center);
-                
-                // Apply rotation
-                relativePos.applyMatrix4(rotationMatrix);
-                
-                // Update the star's position
-                starData.position.copy(cluster.center.clone().add(relativePos));
-                
-                // Update instanced mesh position
-                updateInstancedStarPosition(starData);
-              }
-            });
-          }
+    // Cluster rotation removed - stars now only respond to sphere force field
         }
       });
 
@@ -1208,7 +1193,7 @@
           let totalStarsPushed = 0;
           
           currentClusters.forEach(cluster => {
-            const pushRadius = 16;
+            const pushRadius = 12;
             const pushRadiusSquared = pushRadius * pushRadius;
             
             // Categorize stars by size for optimized processing
@@ -1220,23 +1205,26 @@
               const inverseMass = INVERSE_MASSES[category];
               
               stars.forEach(starData => {
-                // Use distanceSquared for performance
+                // Use distanceSquared for performance - FIXED: use current position, not original
                 const distSquared = starData.position.distanceToSquared(sphere.position);
                 
                 if (distSquared < pushRadiusSquared) {
                   // Calculate force with mass consideration
                   const dist = Math.sqrt(distSquared);
-                  const normalizedDist = dist / pushRadius;
+                  const normalizedDist = Math.max(dist / pushRadius, 0.01); // Prevent division by zero
                   const baseForce = Math.pow(1 - normalizedDist, 2) * 0.8;
                   
                   // Apply inverse mass - bigger stars move less!
                   const massAdjustedForce = baseForce * inverseMass;
                   
+                  // Cap the maximum force to prevent explosions
+                  const cappedForce = Math.min(massAdjustedForce, 0.2);
+                  
                   const direction = new THREE.Vector3()
                     .subVectors(starData.position, sphere.position)
                     .normalize();
                   
-                  starData.velocity.add(direction.multiplyScalar(massAdjustedForce));
+                  starData.velocity.add(direction.multiplyScalar(cappedForce));
                   totalStarsPushed++;
                 }
                 
@@ -1246,8 +1234,25 @@
                 const dampingFactor = 0.995 + (1 - inverseMass) * 0.002;
                 starData.velocity.multiplyScalar(dampingFactor);
                 
-                // Update instanced mesh position
-                updateInstancedStarPosition(starData);
+                // Cap velocity to prevent explosions
+                const maxVelocity = 2.0; // Maximum velocity per frame
+                if (starData.velocity.length() > maxVelocity) {
+                  starData.velocity.normalize().multiplyScalar(maxVelocity);
+                }
+                
+                // Update instanced mesh position with physics displacement
+                const finalPos = starData.position.clone();
+                const matrix = new THREE.Matrix4();
+                const scale = starData.size * (shouldUseSprite(finalPos.distanceTo(camera.position)) ? 6 : 1);
+                
+                matrix.compose(
+                  finalPos,
+                  new THREE.Quaternion(),
+                  new THREE.Vector3(scale, scale, scale)
+                );
+                
+                starData.instancedMesh.setMatrixAt(starData.instancedIndex, matrix);
+                starData.instancedMesh.instanceMatrix.needsUpdate = true;
                 
                 // Mass-based return force
                 const displacementSquared = starData.position.distanceToSquared(starData.originalPos);
@@ -1282,7 +1287,7 @@
           let totalStarsPushed = 0;
           
           currentClusters.forEach(cluster => {
-            const pushRadius = 16;
+            const pushRadius = 12;
             const pushRadiusSquared = pushRadius * pushRadius;
             const interactionRadius = 4;
             const interactionRadiusSquared = interactionRadius * interactionRadius;
@@ -1300,15 +1305,18 @@
                 
                 if (distSquared < pushRadiusSquared) {
                   const dist = Math.sqrt(distSquared);
-                  const normalizedDist = dist / pushRadius;
+                  const normalizedDist = Math.max(dist / pushRadius, 0.01); // Prevent division by zero
                   const baseForce = Math.pow(1 - normalizedDist, 2) * 0.8;
                   const massAdjustedForce = baseForce * inverseMass;
+                  
+                  // Cap the maximum force to prevent explosions
+                  const cappedForce = Math.min(massAdjustedForce, 0.2);
                   
                   const direction = new THREE.Vector3()
                     .subVectors(starData.position, sphere.position)
                     .normalize();
                   
-                  starData.velocity.add(direction.multiplyScalar(massAdjustedForce));
+                  starData.velocity.add(direction.multiplyScalar(cappedForce));
                   totalStarsPushed++;
                 }
               });
@@ -1362,6 +1370,12 @@
                 starData.position.add(starData.velocity);
                 const dampingFactor = 0.995 + (1 - inverseMass) * 0.002;
                 starData.velocity.multiplyScalar(dampingFactor);
+                
+                // Cap velocity to prevent explosions
+                const maxVelocity = 2.0; // Maximum velocity per frame
+                if (starData.velocity.length() > maxVelocity) {
+                  starData.velocity.normalize().multiplyScalar(maxVelocity);
+                }
                 
                 // Update instanced mesh position
                 updateInstancedStarPosition(starData);

@@ -8,10 +8,19 @@
     "start": "live-server --port=3000 --open=/index.html",
     "serve": "python -m http.server 8000"
   },
-  "keywords": ["threejs", "3d", "stars", "webgl", "animation"],
+  "keywords": [
+    "threejs",
+    "3d",
+    "stars",
+    "webgl",
+    "animation"
+  ],
   "author": "",
   "license": "MIT",
   "devDependencies": {
     "live-server": "^1.2.2"
+  },
+  "dependencies": {
+    "ws": "^8.18.3"
   }
 }
