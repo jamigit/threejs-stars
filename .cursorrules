@@ -1,0 +1,122 @@
+# Cursor Rules for Three.js Stars Project
+
+## Project Overview
+This is a Three.js-based interactive 3D space experience with physics-based star interactions, smooth camera controls, and performance optimizations.
+
+## Language & Framework Rules
+
+### Primary Languages
+- **JavaScript/TypeScript**: Use for all code implementation
+- **HTML**: For structure and dependencies
+- **CSS**: For styling and UI
+
+### Prohibited Languages
+- **Python**: Do not use Python for any code generation, file manipulation, or automation
+- **Shell/Bash**: Avoid shell scripts for file operations
+- **Other scripting languages**: Stick to web technologies
+
+## Code Implementation Guidelines
+
+### File Operations
+- Use direct file editing tools (search_replace, write, etc.)
+- Avoid creating temporary Python scripts
+- Make changes directly to the target files
+- Use built-in tools for file manipulation
+
+### Three.js Best Practices
+- Use Three.js r128 (current version in project)
+- Prefer vanilla JavaScript over frameworks
+- Use proper Three.js patterns for geometry, materials, and animations
+- Implement proper cleanup for memory management
+
+### Performance Considerations
+- Use object pooling for particles and geometries
+- Implement LOD (Level of Detail) systems
+- Use instanced rendering for large numbers of objects
+- Monitor frame rates and implement adaptive quality
+
+### Code Style
+- Use descriptive variable names
+- Add meaningful comments for complex physics calculations
+- Keep functions focused and modular
+- Use consistent indentation (2 spaces)
+
+## Project Structure
+```
+threejs-stars/
+├── index.html      # Main HTML file with Three.js dependencies
+├── styles.css      # CSS styling and UI
+├── main.js         # Core Three.js scene, physics, and logic
+├── package.json    # Node.js dependencies and scripts
+├── dev-server.js   # Custom development server with live reload
+└── README.md       # Project documentation
+```
+
+## Key Features to Maintain
+- Interactive sphere movement with WASD controls
+- Physics-based star interactions
+- Smooth camera controls (orbit, zoom)
+- Performance monitoring and optimization
+- Dynamic star clusters with procedural generation
+- Particle trail system
+- Point lighting and emissive materials
+
+## Development Workflow
+1. Make changes directly to files using built-in tools
+2. Test changes in browser with live reload
+3. Monitor performance metrics
+4. Update documentation as needed
+
+## Debugging Guidelines
+- Use browser console for debugging
+- Implement performance monitoring tools
+- Add temporary console.log statements for debugging
+- Use Three.js inspector tools when available
+
+## Performance Targets
+- Maintain 60 FPS on modern hardware
+- Keep memory usage reasonable
+- Implement graceful degradation for lower-end devices
+- Use adaptive quality systems
+
+## Code Quality Standards
+- No syntax errors
+- Consistent formatting
+- Meaningful variable and function names
+- Proper error handling
+- Clean, readable code structure
+
+## File Modification Rules
+- Always read files before modifying
+- Use precise search and replace operations
+- Verify changes with linting tools
+- Test functionality after modifications
+- Keep backups of working versions
+
+## Documentation Requirements
+- Update README.md for significant changes
+- Comment complex physics calculations
+- Document performance optimizations
+- Maintain feature checklist in README
+
+## Testing Guidelines
+- Test all movement controls (WASD, mouse, spacebar)
+- Verify physics interactions work correctly
+- Check performance on different devices
+- Ensure smooth animations and transitions
+- Test edge cases and boundary conditions
+
+## Prohibited Practices
+- Creating Python scripts for file operations
+- Using external automation tools
+- Modifying core Three.js files
+- Hardcoding values that should be configurable
+- Ignoring performance implications
+- Breaking existing functionality without testing
+
+## Emergency Procedures
+- Use git to revert problematic changes
+- Keep working commits for rollback
+- Test changes incrementally
+- Document any breaking changes
+- Maintain backward compatibility when possible

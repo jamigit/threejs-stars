@@ -7,8 +7,12 @@
   let trailPoints = [];
   let starClusters = [];
   let distanceTraveled = 0;
-  let speed = 0.12;
-  let targetSpeed = 0.12;
+  let speed = 0.04; // Reduced from 0.12 for slower movement
+  let targetSpeed = 0.04; // Reduced from 0.12 for slower movement
+  
+  // Time-based movement control
+  let timeScale = 0.3; // Global speed multiplier (0.3 = 30% of original speed)
+  let lastTime = 0;
   let isDragging = false;
   let previousMouse = { x: 0, y: 0 };
   let cameraAngle = { theta: -Math.PI / 2, phi: Math.PI / 4 };
@@ -27,7 +31,7 @@
   // Particle tail system - red and orange particle tail
   let tailParticles = [];
   let maxTailParticles = 200; // Increased for wider tail
-  let tailParticleGeometry = new THREE.SphereGeometry(0.08, 8, 8); // Larger particles for wider tail
+  let tailParticleGeometry = new THREE.SphereGeometry(0.12, 12, 12); // Much larger particles for better visibility
   let tailColors = [0xff0000, 0xff4400]; // Red and orange colors
   
   // Additional performance optimizations
@@ -38,8 +42,8 @@
   let trailUpdateCounter = 0; // Throttle trail updates
   
   // LOD (Level of Detail) system
-  let lodDistances = [25, 50, 100]; // Distance thresholds for LOD (increased for better visibility)
-  let lodMultipliers = [1.0, 0.8, 0.5]; // Star count multipliers (less aggressive reduction)
+  let lodDistances = [20, 50, 100]; // Distance thresholds for LOD (increased for better visibility)
+  let lodMultipliers = [1.0, 0.9, 0.7]; // Increased minimum star density
   let lodGeometries = []; // Different geometry qualities
   
   // Frame rate adaptive quality
@@ -86,7 +90,7 @@
     const particleMaterial = new THREE.MeshBasicMaterial({ 
       color: particleColor,
       transparent: true, 
-      opacity: 0.9, // High opacity for visibility
+      opacity: 1.0, // Maximum opacity for visibility
       emissive: particleColor,
       emissiveIntensity: 0.5
     });
@@ -139,13 +143,13 @@
 
   // Function to update sphere movement based on keyboard input
   function updateSphereMovement() {
-    const baseAcceleration = 0.003; // Further reduced base acceleration rate for slower movement
-    const verticalAcceleration = 0.0015; // Slower acceleration for vertical movement
+    const baseAcceleration = 0.001; // Much slower acceleration // Further reduced base acceleration rate for slower movement
+    const verticalAcceleration = 0.0005; // Much slower vertical acceleration // Slower acceleration for vertical movement
     const accelerationMultiplier = 1.03; // Further reduced acceleration multiplier for smoother buildup
     const friction = 0.92; // Even smoother deceleration
-    const maxSpeed = 0.12; // Further reduced maximum movement speed
-    const maxVerticalSpeed = 0.06; // Slower maximum speed for vertical movement
-    const maxDeviation = 15; // Increased maximum distance from center position
+    const maxSpeed = 0.04; // Much slower maximum speed // Further reduced maximum movement speed
+    const maxVerticalSpeed = 0.02; // Much slower vertical speed // Slower maximum speed for vertical movement
+    const maxDeviation = 25; // Increased maximum distance from center position
     const pullbackForce = 0.008; // Stronger pullback force for better return to center
     const verticalPullbackForce = 0.004; // Stronger pullback for vertical movement
     const wobbleStrength = 0.2; // Reduced wobble strength for smoother effect
@@ -239,7 +243,7 @@
   // Function to create cluster template
   function createClusterTemplate(getRandom, starColors) {
     const clusterSize = getRandom() * 80 + 40; // Much larger clusters (was 45+15, now 80+40)
-    const starCount = Math.floor(getRandom() * 600 + 300); // Much higher base star count for density
+    const starCount = Math.floor(getRandom() * 800 + 400); // Much higher base star count for increased density
       
       const cluster = {
         stars: [],
@@ -333,7 +337,7 @@
   function createInstancedCluster(cluster, distanceFromSphere) {
     if (distanceFromSphere < 40) return null; // Only for distant clusters
     
-    const starCount = Math.min(cluster.stars.length, 200); // Limit instanced stars
+    const starCount = Math.min(cluster.stars.length, 300); // Increased limit from 200 to 300
     const geometry = new THREE.SphereGeometry(0.1, 6, 6); // Lower quality
     const material = new THREE.MeshStandardMaterial({
       emissive: 0xffffff,
@@ -784,23 +788,18 @@
     });
     scene.add(trailMesh);
     
-    // Also keep line trail
+    // Simple line trail
     const trailGeom = new THREE.BufferGeometry();
     const maxTrailPoints = 200;
     const positions = new Float32Array(maxTrailPoints * 3);
     const colors = new Float32Array(maxTrailPoints * 3);
-    
-    // Initialize with sphere position
-    for (let i = 0; i < 3; i++) {
-      positions[i] = sphere.position.getComponent(i);
-    }
     
     trailGeom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
     trailGeom.setAttribute('color', new THREE.BufferAttribute(colors, 3));
     
     const trailMat = new THREE.LineBasicMaterial({
       vertexColors: true,
-      linewidth: 12, // Increased line width for better visibility
+      linewidth: 5,
       depthTest: false
     });
     
@@ -840,7 +839,7 @@
     const onKeyDown = (e) => {
       if (e.code === 'Space') {
         e.preventDefault();
-        targetSpeed = 1.0;
+        targetSpeed = 0.15; // Reduced boost speed
       }
       if (e.code === 'KeyM') {
         physicsMode = physicsMode === 'standard' ? 'chain' : 'standard';
@@ -864,7 +863,7 @@
 
     const onKeyUp = (e) => {
       if (e.code === 'Space') {
-        targetSpeed = 0.12;
+        targetSpeed = 0.04; // Reduced normal speed
       }
       if (e.code === 'KeyA') {
         keysPressed.a = false;
@@ -895,7 +894,7 @@
       const frameStartTime = performance.now();
       
       // Smooth acceleration/deceleration
-      const acceleration = targetSpeed > speed ? 0.02 : 0.015;
+      const acceleration = targetSpeed > speed ? 0.008 : 0.006; // Much slower acceleration
       speed += (targetSpeed - speed) * acceleration;
       
       distanceTraveled += speed;
@@ -1002,7 +1001,7 @@
             const distToSphere = cluster.center.distanceTo(sphere.position);
             const dynamicMultiplier = getDynamicDensityMultiplier(distToSphere);
             
-            const starCount = Math.max(30, Math.floor(cluster.stars.length * dynamicMultiplier * adaptiveQuality));
+            const starCount = Math.max(50, Math.floor(cluster.stars.length * dynamicMultiplier * adaptiveQuality)); // Increased minimum from 30 to 50
             
             // Debug: Log dynamic LOD calculation
             if (frameCount % 30 === 0) {
@@ -1071,15 +1070,18 @@
             applyFakePhysics(cluster, distToCluster);
           }
           
-          // Always apply gentle return force to all rendered stars (even when sphere is far away)
+          // Apply gentle return force only to significantly displaced stars
           if (cluster.rendered) {
             cluster.stars.forEach(starData => {
               if (starData.velocity && starData.velocity.length() > 0.001) {
-                // Apply very gentle return force to slowly drift back to original position
-                const returnForce = new THREE.Vector3()
-                  .subVectors(starData.originalPos, starData.position)
-                  .multiplyScalar(0.001); // Very gentle drift back
-                starData.velocity.add(returnForce);
+                const displacement = starData.position.distanceTo(starData.originalPos);
+                if (displacement > 1.5) { // Only return if significantly displaced
+                  // Apply very gentle return force to slowly drift back to original position
+                  const returnForce = new THREE.Vector3()
+                    .subVectors(starData.originalPos, starData.position)
+                    .multiplyScalar(0.0003); // Much gentler drift back
+                  starData.velocity.add(returnForce);
+                }
                 
                 // Apply velocity and damping
                 starData.position.add(starData.velocity);
@@ -1198,10 +1200,14 @@
                 // Update instanced mesh position
                 updateInstancedStarPosition(starData);
               
-              const returnForce = new THREE.Vector3()
-                .subVectors(starData.originalPos, starData.position)
-                  .multiplyScalar(0.002); // Even gentler return force for very slow drift back
-              starData.velocity.add(returnForce);
+              // Only apply return force if star is significantly displaced and not actively being pushed
+              const displacement = starData.position.distanceTo(starData.originalPos);
+              if (displacement > 2.0 && dist > pushRadius * 1.5) { // Only return if far from original and not near sphere
+                const returnForce = new THREE.Vector3()
+                  .subVectors(starData.originalPos, starData.position)
+                  .multiplyScalar(0.0005); // Much weaker return force
+                starData.velocity.add(returnForce);
+              }
               }
             });
             
@@ -1293,10 +1299,14 @@
               // Update instanced mesh position
               updateInstancedStarPosition(starData);
               
-              const returnForce = new THREE.Vector3()
-                .subVectors(starData.originalPos, starData.position)
-                .multiplyScalar(0.002); // Even gentler return force for very slow drift back
-              starData.velocity.add(returnForce);
+              // Only apply return force if star is significantly displaced
+              const displacement = starData.position.distanceTo(starData.originalPos);
+              if (displacement > 2.0) { // Only return if far from original position
+                const returnForce = new THREE.Vector3()
+                  .subVectors(starData.originalPos, starData.position)
+                  .multiplyScalar(0.0005); // Much weaker return force
+                starData.velocity.add(returnForce);
+              }
             });
             
             totalStarsProcessed += starsProcessed;
@@ -1330,7 +1340,7 @@
         trailPositions[i * 3 + 1] = point.y;
         trailPositions[i * 3 + 2] = point.z;
         
-        // Bright gradient colors (OPTIMIZED: Use pre-calculated colors)
+        // Bright gradient colors
         const colorIndex = Math.floor((i / trailPoints.length) * (preCalculatedTrailColors.length - 1));
         const color = preCalculatedTrailColors[colorIndex];
         
@@ -1590,7 +1600,7 @@
 
   // Smart density scaling system
   let densityScalingEnabled = true;
-  let baseDensityMultipliers = [2.5, 2.0, 1.5, 1.0, 0.7, 0.4]; // Base multipliers for different distances
+  let baseDensityMultipliers = [3.0, 2.5, 2.0, 1.5, 1.0, 0.6]; // Increased base multipliers for higher density
   let currentDensityMultipliers = [...baseDensityMultipliers]; // Current active multipliers
   let performanceTargetFPS = 55; // Target FPS for quality scaling
   let densityUpdateCounter = 0;
