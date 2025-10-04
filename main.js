@@ -25,6 +25,11 @@
   let forceFieldRadius = 12; // Adjustable force field radius
   let forceFieldMesh = null; // Reference to force field visualization
   
+  // Heat effect system
+  let heatIntensity = 0; // Current heat intensity (0-1)
+  let heatDecayRate = 0.015; // How fast heat fades (per frame) - slower decay for more visible effect
+  let maxHeatIntensity = 1.0; // Maximum heat intensity
+  
   // Performance optimization variables
   let activeClusters = []; // Only 8-10 clusters active at once (increased for higher density)
   let maxActiveClusters = 10;
@@ -152,6 +157,50 @@
       forceFieldMesh.geometry = newGeometry;
       
       console.log(`Force field radius: ${forceFieldRadius}`);
+    }
+  }
+
+  // Heat effect system functions
+  function updateHeatEffect() {
+    // Decay heat over time
+    if (heatIntensity > 0) {
+      heatIntensity = Math.max(0, heatIntensity - heatDecayRate);
+      
+      // Update force field material properties
+      if (forceFieldMesh && forceFieldMesh.material) {
+        const material = forceFieldMesh.material;
+        
+        // Interpolate between cool (cyan) and hot (bright red) colors
+        const coolColor = new THREE.Color(0x00ffff); // Cyan
+        const hotColor = new THREE.Color(0xff0000);  // Bright red for more dramatic effect
+        
+        // Mix colors based on heat intensity
+        material.color.lerpColors(coolColor, hotColor, heatIntensity);
+        
+        // Increase emissive intensity when hot
+        material.emissiveIntensity = 0.3 + (heatIntensity * 0.7); // 0.3 to 1.0
+        
+        // Increase opacity slightly when hot
+        material.opacity = 0.15 + (heatIntensity * 0.1); // 0.15 to 0.25
+        
+        // Mark material as needing update
+        material.needsUpdate = true;
+        
+        // Debug logging
+        if (frameCount % 60 === 0) {
+          console.log(`Heat update: ${heatIntensity.toFixed(3)}, Color: #${material.color.getHexString()}, Emissive: ${material.emissiveIntensity.toFixed(2)}`);
+        }
+      }
+    }
+  }
+
+  function triggerHeatEffect(intensity = 0.3) {
+    // Add heat intensity (cap at maximum)
+    heatIntensity = Math.min(maxHeatIntensity, heatIntensity + intensity);
+    
+    // Debug logging
+    if (frameCount % 30 === 0) {
+      console.log(`Heat effect triggered! Intensity: ${intensity.toFixed(3)}, Total heat: ${heatIntensity.toFixed(3)}`);
     }
   }
 
@@ -1322,6 +1371,10 @@
                     .normalize();
                   
                   starData.velocity.add(direction.multiplyScalar(cappedForce));
+                  
+                  // Trigger heat effect when star interacts with force field
+                  triggerHeatEffect(cappedForce * 0.3); // Heat intensity proportional to force (increased for visibility)
+                  
                   totalStarsPushed++;
                 }
                 
@@ -1419,6 +1472,10 @@
                     .normalize();
                   
                   starData.velocity.add(direction.multiplyScalar(cappedForce));
+                  
+                  // Trigger heat effect when star interacts with force field
+                  triggerHeatEffect(cappedForce * 0.3); // Heat intensity proportional to force (increased for visibility)
+                  
                   totalStarsPushed++;
                 }
               });
@@ -1568,6 +1625,9 @@
       
       // Update particle tail - thin tail
       updateTailParticles();
+      
+      // Update heat effect
+      updateHeatEffect();
 
       // Debug: Log sphere position every 60 frames
       if (frameCount % 60 === 0) {
