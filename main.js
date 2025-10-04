@@ -219,7 +219,7 @@
     const verticalAcceleration = 0.0005; // Much slower vertical acceleration // Slower acceleration for vertical movement
     const accelerationMultiplier = 1.03; // Further reduced acceleration multiplier for smoother buildup
     const friction = 0.92; // Even smoother deceleration
-    const maxSpeed = 0.04; // Much slower maximum speed // Further reduced maximum movement speed
+    const maxSpeed = 0.08; // Much slower maximum speed // Further reduced maximum movement speed
     const maxVerticalSpeed = 0.02; // Much slower vertical speed // Slower maximum speed for vertical movement
     const maxDeviation = 25; // Increased maximum distance from center position
     const pullbackForce = 0.008; // Stronger pullback force for better return to center
@@ -232,7 +232,9 @@
     // Space button adds forward acceleration (negative Z direction - toward camera)
     // Space button modifies Z velocity (same pattern as A/D)
     if (keysPressed.space) {
-      sphereVelocityZ += 0.008; // Continuous acceleration like WASD keys
+      // Progressive acceleration that builds up over time
+      const accelerationRate = 0.003 * Math.pow(1 + sphereVelocityZ * 0.1, 0.8);
+      sphereVelocityZ += accelerationRate;
       
       // Debug logging
       if (frameCount % 60 === 0) {
@@ -312,8 +314,8 @@
       sphereVelocityZ *= 0.96; // Less aggressive friction than X/Y axis
     }
     
-    // Limit maximum speed (Z-axis) - higher limits when boosting
-    const currentMaxZSpeed = keysPressed.space ? maxSpeed * 3.0 : maxSpeed;
+    // Limit maximum speed (Z-axis) - significantly higher limits when boosting
+    const currentMaxZSpeed = keysPressed.space ? maxSpeed * 15.0 : maxSpeed * 5.0;
     sphereVelocityZ = Math.max(-currentMaxZSpeed, Math.min(currentMaxZSpeed, sphereVelocityZ));
     
     // Update offset (X-axis)
