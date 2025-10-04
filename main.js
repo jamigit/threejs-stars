@@ -25,10 +25,15 @@
   let forceFieldRadius = 12; // Adjustable force field radius
   let forceFieldMesh = null; // Reference to force field visualization
   
-  // Heat effect system
+  // Heat effect system (optimized)
   let heatIntensity = 0; // Current heat intensity (0-1)
-  let heatDecayRate = 0.015; // How fast heat fades (per frame) - slower decay for more visible effect
+  let heatDecayRate = 0.015; // How fast heat fades (per frame)
   let maxHeatIntensity = 1.0; // Maximum heat intensity
+  let lastHeatUpdate = 0; // Track last update to avoid unnecessary material updates
+  
+  // Hit mark system
+  let hitMarks = []; // Array of temporary hit marks on force field
+  let maxHitMarks = 20; // Maximum number of hit marks visible at once
   
   // Performance optimization variables
   let activeClusters = []; // Only 8-10 clusters active at once (increased for higher density)
@@ -162,34 +167,33 @@
 
   // Heat effect system functions
   function updateHeatEffect() {
+    // Only update if heat intensity changed significantly (performance optimization)
+    const currentHeat = heatIntensity;
+    
     // Decay heat over time
     if (heatIntensity > 0) {
       heatIntensity = Math.max(0, heatIntensity - heatDecayRate);
       
-      // Update force field material properties
-      if (forceFieldMesh && forceFieldMesh.material) {
+      // Only update material if heat changed significantly (avoid unnecessary updates)
+      const heatChanged = Math.abs(currentHeat - heatIntensity) > 0.01;
+      
+      if (heatChanged && forceFieldMesh && forceFieldMesh.material) {
         const material = forceFieldMesh.material;
         
-        // Interpolate between cool (cyan) and hot (bright red) colors
-        const coolColor = new THREE.Color(0x00ffff); // Cyan
-        const hotColor = new THREE.Color(0xff0000);  // Bright red for more dramatic effect
+        // Pre-calculate colors (performance optimization)
+        const coolColor = new THREE.Color(0x0088aa); // Darker cyan (matches base color)
+        const hotColor = new THREE.Color(0xff0000);  // Bright red
         
         // Mix colors based on heat intensity
         material.color.lerpColors(coolColor, hotColor, heatIntensity);
         
-        // Increase emissive intensity when hot
-        material.emissiveIntensity = 0.3 + (heatIntensity * 0.7); // 0.3 to 1.0
-        
-        // Increase opacity slightly when hot
-        material.opacity = 0.15 + (heatIntensity * 0.1); // 0.15 to 0.25
+        // Update emissive properties
+        material.emissiveIntensity = 0.4 + (heatIntensity * 1.6); // 0.4 to 2.0
+        material.opacity = 0.25 + (heatIntensity * 0.4); // 0.25 to 0.65
         
         // Mark material as needing update
         material.needsUpdate = true;
-        
-        // Debug logging
-        if (frameCount % 60 === 0) {
-          console.log(`Heat update: ${heatIntensity.toFixed(3)}, Color: #${material.color.getHexString()}, Emissive: ${material.emissiveIntensity.toFixed(2)}`);
-        }
+        lastHeatUpdate = frameCount;
       }
     }
   }
@@ -197,10 +201,75 @@
   function triggerHeatEffect(intensity = 0.3) {
     // Add heat intensity (cap at maximum)
     heatIntensity = Math.min(maxHeatIntensity, heatIntensity + intensity);
+  }
+
+  // Hit mark system functions
+  function createHitMark(hitPosition, intensity = 0.5) {
+    // Create a larger, more visible glowing sphere at the hit location
+    const hitGeometry = new THREE.SphereGeometry(0.8, 12, 8); // Larger hit mark
+    const hitMaterial = new THREE.MeshStandardMaterial({
+      color: 0xff0000, // Bright red
+      transparent: true,
+      opacity: Math.max(0.8, intensity), // Much more opaque
+      emissive: 0xff0000,
+      emissiveIntensity: Math.max(2.0, intensity * 3) // Much brighter
+    });
     
-    // Debug logging
-    if (frameCount % 30 === 0) {
-      console.log(`Heat effect triggered! Intensity: ${intensity.toFixed(3)}, Total heat: ${heatIntensity.toFixed(3)}`);
+    const hitMark = new THREE.Mesh(hitGeometry, hitMaterial);
+    
+    // Position the hit mark on the force field surface
+    const direction = hitPosition.clone().sub(sphere.position).normalize();
+    const surfacePosition = sphere.position.clone().add(direction.multiplyScalar(forceFieldRadius));
+    hitMark.position.copy(surfacePosition);
+    
+    // Add to scene
+    scene.add(hitMark);
+    
+    // Store hit mark data
+    const hitData = {
+      mesh: hitMark,
+      intensity: Math.max(0.9, intensity), // Start very visible
+      decayRate: 0.01, // Slower decay
+      maxLifetime: 180 // frames (3 seconds at 60fps)
+    };
+    
+    hitMarks.push(hitData);
+    
+    // Limit number of hit marks
+    if (hitMarks.length > maxHitMarks) {
+      const oldHit = hitMarks.shift();
+      scene.remove(oldHit.mesh);
+      oldHit.mesh.geometry.dispose();
+      oldHit.mesh.material.dispose();
+    }
+  }
+
+  function updateHitMarks() {
+    // Update all hit marks (optimized for performance)
+    for (let i = hitMarks.length - 1; i >= 0; i--) {
+      const hitData = hitMarks[i];
+      
+      // Decay intensity
+      hitData.intensity -= hitData.decayRate;
+      hitData.maxLifetime--;
+      
+      if (hitData.intensity <= 0 || hitData.maxLifetime <= 0) {
+        // Remove expired hit mark
+        scene.remove(hitData.mesh);
+        hitData.mesh.geometry.dispose();
+        hitData.mesh.material.dispose();
+        hitMarks.splice(i, 1);
+      } else {
+        // Only update material if intensity changed significantly (performance optimization)
+        const oldOpacity = hitData.mesh.material.opacity;
+        const newOpacity = hitData.intensity;
+        
+        if (Math.abs(oldOpacity - newOpacity) > 0.05) {
+          hitData.mesh.material.opacity = newOpacity;
+          hitData.mesh.material.emissiveIntensity = newOpacity * 2;
+          hitData.mesh.material.needsUpdate = true;
+        }
+      }
     }
   }
 
@@ -821,12 +890,12 @@
     // Force field visualization sphere
     const forceFieldGeom = new THREE.SphereGeometry(forceFieldRadius, 32, 32); // Radius matches pushRadius
     const forceFieldMat = new THREE.MeshStandardMaterial({
-      color: 0x00ffff, // Cyan
+      color: 0x0088aa, // Darker cyan
       transparent: true,
-      opacity: 0.15, // Increased from 0.05
+      opacity: 0.25, // Reduced visibility
       wireframe: true,
-      emissive: 0x00ffff,
-      emissiveIntensity: 0.3 // Increased from 0.1
+      emissive: 0x0088aa,
+      emissiveIntensity: 0.4 // Reduced brightness
     });
     const forceField = new THREE.Mesh(forceFieldGeom, forceFieldMat);
     forceField.userData = { layerType: 'forceField' };
@@ -1375,6 +1444,9 @@
                   // Trigger heat effect when star interacts with force field
                   triggerHeatEffect(cappedForce * 0.3); // Heat intensity proportional to force (increased for visibility)
                   
+                  // Create hit mark at the exact hit location
+                  createHitMark(starData.position, cappedForce * 0.5); // Much more visible hit marks
+                  
                   totalStarsPushed++;
                 }
                 
@@ -1475,6 +1547,9 @@
                   
                   // Trigger heat effect when star interacts with force field
                   triggerHeatEffect(cappedForce * 0.3); // Heat intensity proportional to force (increased for visibility)
+                  
+                  // Create hit mark at the exact hit location
+                  createHitMark(starData.position, cappedForce * 0.5); // Much more visible hit marks
                   
                   totalStarsPushed++;
                 }
@@ -1628,6 +1703,9 @@
       
       // Update heat effect
       updateHeatEffect();
+      
+      // Update hit marks
+      updateHitMarks();
 
       // Debug: Log sphere position every 60 frames
       if (frameCount % 60 === 0) {
