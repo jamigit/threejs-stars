@@ -232,7 +232,7 @@
     // Space button adds forward acceleration (negative Z direction - toward camera)
     // Space button modifies Z velocity (same pattern as A/D)
     if (keysPressed.space) {
-      sphereVelocityZ += 0.008; // Continuous acceleration like WASD keys
+      sphereVelocityZ += 0.002; // Continuous acceleration like WASD keys (1/4 reduction)
       
       // Debug logging
       if (frameCount % 60 === 0) {
@@ -313,7 +313,7 @@
     }
     
     // Limit maximum speed (Z-axis) - higher limits when boosting
-    const currentMaxZSpeed = keysPressed.space ? maxSpeed * 3.0 : maxSpeed;
+    const currentMaxZSpeed = keysPressed.space ? maxSpeed * 15.0 : maxSpeed;
     sphereVelocityZ = Math.max(-currentMaxZSpeed, Math.min(currentMaxZSpeed, sphereVelocityZ));
     
     // Update offset (X-axis)
@@ -1261,11 +1261,11 @@
         }
       }
       
-      // Sort by distance and take the 2 closest
+      // Sort by distance and take the 4 closest
       clusterDistances.sort((a, b) => a.distanceSquared - b.distanceSquared);
-      currentClusters = clusterDistances.slice(0, 2).map(item => item.cluster);
+      currentClusters = clusterDistances.slice(0, 4).map(item => item.cluster);
 
-      // Process physics for up to 2 clusters
+      // Process physics for up to 4 clusters
       if (currentClusters.length > 0) {
         // Debug: Log physics interaction
         // if (frameCount % 30 === 0) {
