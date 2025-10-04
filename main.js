@@ -16,10 +16,14 @@
   let isDragging = false;
   let previousMouse = { x: 0, y: 0 };
   let cameraAngle = { theta: -Math.PI / 2, phi: Math.PI / 4 };
-  let cameraDistance = 18;
+  let cameraDistance = 35; // Increased initial zoom for better overview
   let renderDistance = 100;
   let physicsMode = 'standard'; // 'standard' or 'chain'
   let modeDisplay = 'standard';
+  
+  // Force field settings
+  let forceFieldRadius = 12; // Adjustable force field radius
+  let forceFieldMesh = null; // Reference to force field visualization
   
   // Performance optimization variables
   let activeClusters = []; // Only 8-10 clusters active at once (increased for higher density)
@@ -102,7 +106,9 @@
   let sphereVelocityX = 0; // X velocity for smooth movement
   let sphereOffsetY = 0; // Current Y offset from original position
   let sphereVelocityY = 0; // Y velocity for smooth movement
-  let keysPressed = { a: false, d: false, w: false, s: false }; // Track which keys are pressed
+  let sphereOffsetZ = 0; // Current Z offset from original position
+  let sphereVelocityZ = 0; // Z velocity for smooth movement
+  let keysPressed = { a: false, d: false, w: false, s: false, space: false }; // Track which keys are pressed
   let originalSphereY = 0; // Store original Y position for wobble effect
 
   // Star size categorization and mass-based physics functions
@@ -133,11 +139,27 @@
     return categorizedStars;
   }
 
+  // Function to update force field size
+  function updateForceFieldSize() {
+    if (forceFieldMesh) {
+      // Create new geometry with updated radius
+      const newGeometry = new THREE.SphereGeometry(forceFieldRadius, 32, 32);
+      
+      // Dispose old geometry to prevent memory leaks
+      forceFieldMesh.geometry.dispose();
+      
+      // Apply new geometry
+      forceFieldMesh.geometry = newGeometry;
+      
+      console.log(`Force field radius: ${forceFieldRadius}`);
+    }
+  }
+
   // Function to update particle tail - red and orange particle tail
   function updateTailParticles() {
     // Add new particle at sphere position (every frame for wide tail)
     const particleColor = tailColors[Math.floor(Math.random() * tailColors.length)]; // Random red or orange
-    const particleMaterial = new THREE.MeshBasicMaterial({ 
+    const particleMaterial = new THREE.MeshStandardMaterial({ 
       color: particleColor,
       transparent: true, 
       opacity: 1.0, // Maximum opacity for visibility
@@ -204,32 +226,46 @@
     const verticalPullbackForce = 0.004; // Stronger pullback for vertical movement
     const wobbleStrength = 0.2; // Reduced wobble strength for smoother effect
     
+    // Apply boost acceleration when space is held
+    const boostMultiplier = keysPressed.space ? 3.0 : 1.0; // 3x acceleration when boosting
+    
+    // Space button adds forward acceleration (negative Z direction - toward camera)
+    // Space button modifies Z velocity (same pattern as A/D)
+    if (keysPressed.space) {
+      sphereVelocityZ += 0.008; // Continuous acceleration like WASD keys
+      
+      // Debug logging
+      if (frameCount % 60 === 0) {
+        console.log('Space pressed - Z velocity:', sphereVelocityZ.toFixed(4), 'Z offset:', sphereOffsetZ.toFixed(4));
+      }
+    }
+    
     // Apply input forces with accelerating effect (X-axis)
     if (keysPressed.a) {
       // Increase acceleration over time for smooth start
-      const currentAcceleration = baseAcceleration * Math.pow(accelerationMultiplier, Math.abs(sphereVelocityX) * 20);
+      const currentAcceleration = baseAcceleration * Math.pow(accelerationMultiplier, Math.abs(sphereVelocityX) * 20) * boostMultiplier;
       sphereVelocityX += currentAcceleration; // A now moves right (was left)
     }
     if (keysPressed.d) {
       // Increase acceleration over time for smooth start
-      const currentAcceleration = baseAcceleration * Math.pow(accelerationMultiplier, Math.abs(sphereVelocityX) * 20);
+      const currentAcceleration = baseAcceleration * Math.pow(accelerationMultiplier, Math.abs(sphereVelocityX) * 20) * boostMultiplier;
       sphereVelocityX -= currentAcceleration; // D now moves left (was right)
     }
     
     // Apply input forces with accelerating effect (Y-axis) - SLOWER
     if (keysPressed.w) {
       // Increase acceleration over time for smooth start - SLOWER
-      const currentAcceleration = verticalAcceleration * Math.pow(accelerationMultiplier, Math.abs(sphereVelocityY) * 20);
+      const currentAcceleration = verticalAcceleration * Math.pow(accelerationMultiplier, Math.abs(sphereVelocityY) * 20) * boostMultiplier;
       sphereVelocityY += currentAcceleration; // W moves up
     }
     if (keysPressed.s) {
       // Increase acceleration over time for smooth start - SLOWER
-      const currentAcceleration = verticalAcceleration * Math.pow(accelerationMultiplier, Math.abs(sphereVelocityY) * 20);
+      const currentAcceleration = verticalAcceleration * Math.pow(accelerationMultiplier, Math.abs(sphereVelocityY) * 20) * boostMultiplier;
       sphereVelocityY -= currentAcceleration; // S moves down
     }
     
     // Apply smooth deceleration when no keys are pressed (X-axis)
-    if (!keysPressed.a && !keysPressed.d) {
+    if (!keysPressed.a && !keysPressed.d && !keysPressed.space) {
       // Apply friction for smooth deceleration
       sphereVelocityX *= friction;
       
@@ -262,17 +298,39 @@
       }
     }
     
-    // Limit maximum speed (X-axis)
-    sphereVelocityX = Math.max(-maxSpeed, Math.min(maxSpeed, sphereVelocityX));
+    // Limit maximum speed (X-axis) - higher limits when boosting
+    const currentMaxSpeed = keysPressed.space ? maxSpeed * 3.0 : maxSpeed;
+    sphereVelocityX = Math.max(-currentMaxSpeed, Math.min(currentMaxSpeed, sphereVelocityX));
     
-    // Limit maximum speed (Y-axis) - SLOWER
-    sphereVelocityY = Math.max(-maxVerticalSpeed, Math.min(maxVerticalSpeed, sphereVelocityY));
+    // Limit maximum speed (Y-axis) - SLOWER - higher limits when boosting
+    const currentMaxVerticalSpeed = keysPressed.space ? maxVerticalSpeed * 3.0 : maxVerticalSpeed;
+    sphereVelocityY = Math.max(-currentMaxVerticalSpeed, Math.min(currentMaxVerticalSpeed, sphereVelocityY));
+    
+    // Apply smooth deceleration when space is not pressed (Z-axis)
+    if (!keysPressed.space) {
+      // Apply lighter friction for smoother deceleration
+      sphereVelocityZ *= 0.96; // Less aggressive friction than X/Y axis
+    }
+    
+    // Limit maximum speed (Z-axis) - higher limits when boosting
+    const currentMaxZSpeed = keysPressed.space ? maxSpeed * 3.0 : maxSpeed;
+    sphereVelocityZ = Math.max(-currentMaxZSpeed, Math.min(currentMaxZSpeed, sphereVelocityZ));
     
     // Update offset (X-axis)
     sphereOffsetX += sphereVelocityX;
     
-    // Update offset (Y-axis)
+    // Update offset (Y-axis) 
     sphereOffsetY += sphereVelocityY;
+    
+    // Update offset (Z-axis)
+    const oldZOffset = sphereOffsetZ;
+    sphereOffsetZ += sphereVelocityZ;
+    
+    // Debug Z offset changes
+    if (frameCount % 60 === 0 && keysPressed.space) {
+      console.log('Z offset:', oldZOffset.toFixed(4), '->', sphereOffsetZ.toFixed(4));
+    }
+    
     
     // Enforce maximum deviation from center (X-axis)
     if (Math.abs(sphereOffsetX) > maxDeviation) {
@@ -285,6 +343,13 @@
       sphereOffsetY = Math.sign(sphereOffsetY) * maxDeviation;
       sphereVelocityY = 0; // Stop at boundary
     }
+    
+    // Enforce maximum deviation from center (Z-axis) - DISABLED for forward movement
+    // Remove boundary for Z-axis to allow unlimited forward acceleration
+    // if (Math.abs(sphereOffsetZ) > maxDeviation) {
+    //   sphereOffsetZ = Math.sign(sphereOffsetZ) * maxDeviation;
+    //   sphereVelocityZ = 0; // Stop at boundary
+    // }
     
     // Apply smooth Y position without wobbling
     sphere.position.y = originalSphereY + sphereOffsetY;
@@ -638,7 +703,7 @@
 
     // Initialize performance monitoring
     const fpsDisplay = createFpsDisplay();
-    const performanceGraph = createPerformanceGraph();
+    const keyboardControls = createKeyboardControls();
 
     // Create glowing sphere
     const sphereGeom = new THREE.SphereGeometry(0.8, 32, 32);
@@ -703,7 +768,7 @@
     sphere.add(wave);
 
     // Force field visualization sphere
-    const forceFieldGeom = new THREE.SphereGeometry(12, 32, 32); // Radius matches pushRadius
+    const forceFieldGeom = new THREE.SphereGeometry(forceFieldRadius, 32, 32); // Radius matches pushRadius
     const forceFieldMat = new THREE.MeshStandardMaterial({
       color: 0x00ffff, // Cyan
       transparent: true,
@@ -715,6 +780,9 @@
     const forceField = new THREE.Mesh(forceFieldGeom, forceFieldMat);
     forceField.userData = { layerType: 'forceField' };
     sphere.add(forceField);
+    
+    // Store reference for resizing
+    forceFieldMesh = forceField;
 
     // Pre-create fixed path using seed with smooth inertia-based movement
     const startZ = 0;
@@ -759,7 +827,7 @@
       clusterPool.push(clusterTemplate);
     }
     
-    console.log(`Created ${clusterPool.length} cluster templates`);
+    // console.log(`Created ${clusterPool.length} cluster templates`);
 
     // Function to manage active clusters based on sphere position
     function manageActiveClusters() {
@@ -839,9 +907,9 @@
             activeClusters.push(newCluster);
             
             // Debug: Log when clusters spawn ahead
-            if (frameCount % 60 === 0) {
-              console.log(`Spawned cluster ahead at path index ${i}, distance from sphere: ${distToSphere.toFixed(1)}`);
-            }
+            // if (frameCount % 60 === 0) {
+            //   console.log(`Spawned cluster ahead at path index ${i}, distance from sphere: ${distToSphere.toFixed(1)}`);
+            // }
           }
         }
       }
@@ -907,13 +975,24 @@
     const onKeyDown = (e) => {
       if (e.code === 'Space') {
         e.preventDefault();
-        targetSpeed = 0.15; // Reduced boost speed
+        keysPressed.space = true; // Enable continuous boost acceleration
+        console.log('Space key down detected');
       }
       if (e.code === 'KeyM') {
         physicsMode = physicsMode === 'standard' ? 'chain' : 'standard';
         modeDisplay = physicsMode;
         updateModeDisplay();
         console.log('Physics mode:', physicsMode);
+      }
+      if (e.code === 'Equal' || e.code === 'NumpadAdd') { // Plus key (+)
+        e.preventDefault();
+        forceFieldRadius = Math.min(forceFieldRadius + 2, 50); // Increase radius, max 50
+        updateForceFieldSize();
+      }
+      if (e.code === 'Minus' || e.code === 'NumpadSubtract') { // Minus key (-)
+        e.preventDefault();
+        forceFieldRadius = Math.max(forceFieldRadius - 2, 2); // Decrease radius, min 2
+        updateForceFieldSize();
       }
       if (e.code === 'KeyA') {
         keysPressed.a = true;
@@ -931,7 +1010,8 @@
 
     const onKeyUp = (e) => {
       if (e.code === 'Space') {
-        targetSpeed = 0.04; // Reduced normal speed
+        keysPressed.space = false; // Disable boost acceleration
+        console.log('Space key up detected');
       }
       if (e.code === 'KeyA') {
         keysPressed.a = false;
@@ -997,7 +1077,25 @@
         totalDist += segmentLength;
       }
       
+      // Apply sphere movement controls first to update offsets
+      updateSphereMovement();
+      
+      // Apply offsets to targetPos before setting sphere position
+      targetPos.x += sphereOffsetX;
+      targetPos.y += sphereOffsetY;
+      targetPos.z += sphereOffsetZ; // Apply Z offset for space button movement
+      
       sphere.position.copy(targetPos);
+      
+      // Debug sphere position
+      if (frameCount % 60 === 0 && keysPressed.space) {
+        console.log('Sphere Z position:', sphere.position.z.toFixed(4));
+      }
+      
+      // Enhanced debug logging for Z-axis system
+      if (frameCount % 60 === 0) {
+        console.log('Z Debug - velocity:', sphereVelocityZ.toFixed(4), 'offset:', sphereOffsetZ.toFixed(4), 'target Z:', targetPos.z.toFixed(4), 'sphere Z:', sphere.position.z.toFixed(4), 'space:', keysPressed.space);
+      }
       
       // Update point light position to follow sphere
       if (sphere.userData.pointLight) {
@@ -1008,15 +1106,7 @@
       if (originalSphereY === 0) {
         originalSphereY = sphere.position.y;
       }
-
-      // Apply sphere movement controls
-      updateSphereMovement();
       
-      // Apply X offset to sphere position
-      sphere.position.x += sphereOffsetX;
-      
-      // Apply Y offset to sphere position
-      sphere.position.y += sphereOffsetY;
       
       // Update point light position after manual movement
       if (sphere.userData.pointLight) {
@@ -1072,9 +1162,9 @@
             const starCount = Math.max(50, Math.floor(cluster.stars.length * dynamicMultiplier * adaptiveQuality)); // Increased minimum from 30 to 50
             
             // Debug: Log dynamic LOD calculation
-            if (frameCount % 30 === 0) {
-              console.log(`Dynamic LOD: Distance to sphere: ${distToSphere.toFixed(1)}, Multiplier: ${dynamicMultiplier.toFixed(2)}, Adaptive: ${adaptiveQuality.toFixed(2)}, Final count: ${starCount}/${cluster.stars.length}`);
-            }
+            // if (frameCount % 30 === 0) {
+            //   console.log(`Dynamic LOD: Distance to sphere: ${distToSphere.toFixed(1)}, Multiplier: ${dynamicMultiplier.toFixed(2)}, Adaptive: ${adaptiveQuality.toFixed(2)}, Final count: ${starCount}/${cluster.stars.length}`);
+            // }
             
             // Temporarily disable instanced rendering for debugging
             // if (lodLevel >= 2 && distToCluster > 40) {
@@ -1130,9 +1220,9 @@
             });
             
             // Debug: Log cluster rendering
-            if (frameCount % 30 === 0) {
-              console.log(`Rendered cluster with ${meshesCreated} meshes at distance: ${distToCluster.toFixed(1)}`);
-            }
+            // if (frameCount % 30 === 0) {
+            //   console.log(`Rendered cluster with ${meshesCreated} meshes at distance: ${distToCluster.toFixed(1)}`);
+            // }
           } else if (lodLevel >= 1) {
             // Apply fake physics to non-interactive clusters
             applyFakePhysics(cluster, distToCluster);
@@ -1146,14 +1236,14 @@
       });
 
       // Debug: Log cluster detection every 30 frames
-      if (frameCount % 30 === 0) {
-        console.log(`Active clusters: ${activeClusters.length}`);
-        activeClusters.forEach((cluster, i) => {
-          const dist = cluster.center.distanceTo(sphere.position);
-          const renderedStars = cluster.stars.filter(star => star.mesh).length;
-          console.log(`Cluster ${i}: Distance: ${dist.toFixed(1)}, Rendered: ${cluster.rendered}, Stars: ${renderedStars}/${cluster.stars.length}`);
-        });
-      }
+      // if (frameCount % 30 === 0) {
+      //   console.log(`Active clusters: ${activeClusters.length}`);
+      //   activeClusters.forEach((cluster, i) => {
+      //     const dist = cluster.center.distanceTo(sphere.position);
+      //     const renderedStars = cluster.stars.filter(star => star.mesh).length;
+      //     console.log(`Cluster ${i}: Distance: ${dist.toFixed(1)}, Rendered: ${cluster.rendered}, Stars: ${renderedStars}/${cluster.stars.length}`);
+      //   });
+      // }
       
       // Find the 2 closest clusters the sphere can interact with (OPTIMIZED)
       let currentClusters = [];
@@ -1178,13 +1268,13 @@
       // Process physics for up to 2 clusters
       if (currentClusters.length > 0) {
         // Debug: Log physics interaction
-        if (frameCount % 30 === 0) {
-          console.log(`Physics active on ${currentClusters.length} cluster(s), Mode: ${physicsMode}`);
-          currentClusters.forEach((cluster, index) => {
-            const dist = cluster.center.distanceTo(sphere.position);
-            console.log(`Cluster ${index + 1}: Distance: ${dist.toFixed(1)}, Stars: ${cluster.stars.length}`);
-          });
-        }
+        // if (frameCount % 30 === 0) {
+        //   console.log(`Physics active on ${currentClusters.length} cluster(s), Mode: ${physicsMode}`);
+        //   currentClusters.forEach((cluster, index) => {
+        //     const dist = cluster.center.distanceTo(sphere.position);
+        //     console.log(`Cluster ${index + 1}: Distance: ${dist.toFixed(1)}, Stars: ${cluster.stars.length}`);
+        //   });
+        // }
           
         // Update star physics based on mode (MASS-BASED with size categories)
         if (physicsMode === 'standard') {
@@ -1193,7 +1283,7 @@
           let totalStarsPushed = 0;
           
           currentClusters.forEach(cluster => {
-            const pushRadius = 12;
+            const pushRadius = forceFieldRadius;
             const pushRadiusSquared = pushRadius * pushRadius;
             
             // Categorize stars by size for optimized processing
@@ -1211,14 +1301,19 @@
                 if (distSquared < pushRadiusSquared) {
                   // Calculate force with mass consideration
                   const dist = Math.sqrt(distSquared);
-                  const normalizedDist = Math.max(dist / pushRadius, 0.01); // Prevent division by zero
-                  const baseForce = Math.pow(1 - normalizedDist, 2) * 0.8;
+                  const normalizedDist = Math.max(dist / pushRadius, 0.001); // Smaller minimum for more immediate push response
+                  
+                  // Calculate sphere's current speed for proportional force
+                  const sphereSpeed = Math.sqrt(sphereVelocityX * sphereVelocityX + sphereVelocityY * sphereVelocityY);
+                  const speedMultiplier = 1.0 + (sphereSpeed * 10); // Speed affects force (1.0 = base, higher = stronger)
+                  
+                  const baseForce = Math.pow(1 - normalizedDist, 2) * 2.0 * speedMultiplier; // Speed-proportional force
                   
                   // Apply inverse mass - bigger stars move less!
                   const massAdjustedForce = baseForce * inverseMass;
                   
-                  // Cap the maximum force to prevent explosions
-                  const cappedForce = Math.min(massAdjustedForce, 0.2);
+                  // Cap the maximum force to prevent explosions but allow strong pushes
+                  const cappedForce = Math.min(massAdjustedForce, 1.5); // Increased cap for speed-boosted hits
                   
                   const direction = new THREE.Vector3()
                     .subVectors(starData.position, sphere.position)
@@ -1228,10 +1323,10 @@
                   totalStarsPushed++;
                 }
                 
-                // Apply physics updates with mass-based damping
+                // Apply physics updates with reduced damping to preserve momentum
                 starData.position.add(starData.velocity);
-                // Heavier stars have less damping (more momentum)
-                const dampingFactor = 0.995 + (1 - inverseMass) * 0.002;
+                // Much less damping to preserve momentum after push
+                const dampingFactor = 0.995 + (1 - inverseMass) * 0.002; // Reduced damping to preserve momentum
                 starData.velocity.multiplyScalar(dampingFactor);
                 
                 // Cap velocity to prevent explosions
@@ -1254,13 +1349,13 @@
                 starData.instancedMesh.setMatrixAt(starData.instancedIndex, matrix);
                 starData.instancedMesh.instanceMatrix.needsUpdate = true;
                 
-                // Mass-based return force
+                // Much weaker return force to preserve momentum
                 const displacementSquared = starData.position.distanceToSquared(starData.originalPos);
-                if (displacementSquared > 4.0 && distSquared > pushRadiusSquared * 2.25) {
+                if (displacementSquared > 25.0 && distSquared > pushRadiusSquared * 4.0) { // Increased thresholds
                   const displacement = Math.sqrt(displacementSquared);
                   const returnForce = new THREE.Vector3()
                     .subVectors(starData.originalPos, starData.position)
-                    .multiplyScalar(0.0005 * inverseMass); // Heavier stars resist return force more
+                    .multiplyScalar(0.0001 * inverseMass); // Much weaker return force
                   starData.velocity.add(returnForce);
                 }
                 
@@ -1277,8 +1372,8 @@
             if (currentClusters.length > 0) {
               const cluster = currentClusters[0];
               const categorizedStars = categorizeStarsBySize(cluster);
-              console.log(`Size categories: Small: ${categorizedStars.SMALL.length}, Medium: ${categorizedStars.MEDIUM.length}, Large: ${categorizedStars.LARGE.length}, Giant: ${categorizedStars.GIANT.length}`);
-              console.log(`Cluster rotation: Speed: ${cluster.rotationSpeed.toFixed(4)}, Angle: ${cluster.rotationAngle.toFixed(2)}`);
+              // console.log(`Size categories: Small: ${categorizedStars.SMALL.length}, Medium: ${categorizedStars.MEDIUM.length}, Large: ${categorizedStars.LARGE.length}, Giant: ${categorizedStars.GIANT.length}`);
+              // console.log(`Cluster rotation: Speed: ${cluster.rotationSpeed.toFixed(4)}, Angle: ${cluster.rotationAngle.toFixed(2)}`);
             }
           }
         } else {
@@ -1287,7 +1382,7 @@
           let totalStarsPushed = 0;
           
           currentClusters.forEach(cluster => {
-            const pushRadius = 12;
+            const pushRadius = forceFieldRadius;
             const pushRadiusSquared = pushRadius * pushRadius;
             const interactionRadius = 4;
             const interactionRadiusSquared = interactionRadius * interactionRadius;
@@ -1305,12 +1400,17 @@
                 
                 if (distSquared < pushRadiusSquared) {
                   const dist = Math.sqrt(distSquared);
-                  const normalizedDist = Math.max(dist / pushRadius, 0.01); // Prevent division by zero
-                  const baseForce = Math.pow(1 - normalizedDist, 2) * 0.8;
+                  const normalizedDist = Math.max(dist / pushRadius, 0.001); // Smaller minimum for more immediate push response
+                  
+                  // Calculate sphere's current speed for proportional force
+                  const sphereSpeed = Math.sqrt(sphereVelocityX * sphereVelocityX + sphereVelocityY * sphereVelocityY);
+                  const speedMultiplier = 1.0 + (sphereSpeed * 10); // Speed affects force (1.0 = base, higher = stronger)
+                  
+                  const baseForce = Math.pow(1 - normalizedDist, 2) * 2.0 * speedMultiplier; // Speed-proportional force
                   const massAdjustedForce = baseForce * inverseMass;
                   
-                  // Cap the maximum force to prevent explosions
-                  const cappedForce = Math.min(massAdjustedForce, 0.2);
+                  // Cap the maximum force to prevent explosions but allow strong pushes
+                  const cappedForce = Math.min(massAdjustedForce, 1.5); // Increased cap for speed-boosted hits
                   
                   const direction = new THREE.Vector3()
                     .subVectors(starData.position, sphere.position)
@@ -1366,9 +1466,9 @@
                   }
                 });
                 
-                // Apply physics updates with mass-based damping
+                // Apply physics updates with reduced damping to preserve momentum
                 starData.position.add(starData.velocity);
-                const dampingFactor = 0.995 + (1 - inverseMass) * 0.002;
+                const dampingFactor = 0.995 + (1 - inverseMass) * 0.002; // Reduced damping to preserve momentum
                 starData.velocity.multiplyScalar(dampingFactor);
                 
                 // Cap velocity to prevent explosions
@@ -1380,13 +1480,13 @@
                 // Update instanced mesh position
                 updateInstancedStarPosition(starData);
                 
-                // Mass-based return force
+                // Much weaker return force to preserve momentum
                 const displacementSquared = starData.position.distanceToSquared(starData.originalPos);
-                if (displacementSquared > 4.0) {
+                if (displacementSquared > 25.0) { // Increased threshold
                   const displacement = Math.sqrt(displacementSquared);
                   const returnForce = new THREE.Vector3()
                     .subVectors(starData.originalPos, starData.position)
-                    .multiplyScalar(0.0005 * inverseMass);
+                    .multiplyScalar(0.0001 * inverseMass); // Much weaker return force
                   starData.velocity.add(returnForce);
                 }
                 
@@ -1480,7 +1580,7 @@
             renderedClusters++;
           }
         });
-        console.log(`Performance: Active clusters: ${activeClusters.length}, Rendered: ${renderedClusters}, Active stars: ${activeStars}, Geometry pool: ${geometryPool.length}, Material pool: ${materialPool.length}, Adaptive quality: ${adaptiveQuality.toFixed(2)}, Interacting clusters: ${currentClusters.length}`);
+        // console.log(`Performance: Active clusters: ${activeClusters.length}, Rendered: ${renderedClusters}, Active stars: ${activeStars}, Geometry pool: ${geometryPool.length}, Material pool: ${materialPool.length}, Adaptive quality: ${adaptiveQuality.toFixed(2)}, Interacting clusters: ${currentClusters.length}`);
         
         // Update performance metrics
         performanceMetrics.starCount = activeStars;
@@ -1516,7 +1616,7 @@
         // Update displays every 10 frames
         if (frameCount % 10 === 0) {
           updateFpsDisplay(fpsDisplay);
-          updatePerformanceGraph(performanceGraph);
+          updateKeyboardControls(keyboardControls);
         }
       }
       
@@ -1567,22 +1667,37 @@
     return fpsDiv;
   }
 
-  function createPerformanceGraph() {
-    const canvas = document.createElement('canvas');
-    canvas.width = 300;
-    canvas.height = 150;
-    canvas.id = 'performance-graph';
-    canvas.style.cssText = `
+  function createKeyboardControls() {
+    const controlsDiv = document.createElement('div');
+    controlsDiv.id = 'keyboard-controls';
+    controlsDiv.style.cssText = `
       position: fixed;
       bottom: 10px;
       right: 10px;
       background: rgba(0,0,0,0.8);
       border: 1px solid #333;
       border-radius: 4px;
+      padding: 10px;
+      color: #fff;
+      font-family: 'Courier New', monospace;
+      font-size: 12px;
       z-index: 1000;
+      min-width: 200px;
     `;
-    document.body.appendChild(canvas);
-    return canvas;
+    
+    controlsDiv.innerHTML = `
+      <div style="color: #00ff00; font-weight: bold; margin-bottom: 8px;">KEYBOARD CONTROLS</div>
+      <div style="margin-bottom: 4px;"><span style="color: #ffff00;">WASD</span> - Move sphere</div>
+      <div style="margin-bottom: 4px;"><span style="color: #ffff00;">SPACE</span> - Boost (hit harder)</div>
+      <div style="margin-bottom: 4px;"><span style="color: #ffff00;">M</span> - Toggle physics mode</div>
+      <div style="margin-bottom: 4px;"><span style="color: #ffff00;">+/-</span> - Resize force field</div>
+      <div style="margin-bottom: 4px;"><span style="color: #ffff00;">Mouse</span> - Orbit camera</div>
+      <div style="margin-bottom: 4px;"><span style="color: #ffff00;">Scroll</span> - Zoom camera</div>
+      <div style="color: #00ffff; font-size: 10px; margin-top: 8px;">Faster movement = stronger hits!</div>
+    `;
+    
+    document.body.appendChild(controlsDiv);
+    return controlsDiv;
   }
 
   function updateFpsDisplay(fpsDiv) {
@@ -1598,59 +1713,9 @@
     `;
   }
 
-  function updatePerformanceGraph(canvas) {
-    const ctx = canvas.getContext('2d');
-    const width = canvas.width;
-    const height = canvas.height;
-    
-    // Clear canvas
-    ctx.fillStyle = 'rgba(0,0,0,0.8)';
-    ctx.fillRect(0, 0, width, height);
-    
-    // Draw grid lines
-    ctx.strokeStyle = '#333';
-    ctx.lineWidth = 1;
-    for (let i = 0; i <= 4; i++) {
-      const y = (height / 4) * i;
-      ctx.beginPath();
-      ctx.moveTo(0, y);
-      ctx.lineTo(width, y);
-      ctx.stroke();
-    }
-    
-    // Draw FPS line
-    if (fpsHistory.length > 1) {
-      ctx.strokeStyle = '#00ff00';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      
-      const maxFps = Math.max(...fpsHistory);
-      const minFps = Math.min(...fpsHistory);
-      const fpsRange = maxFps - minFps || 1;
-      
-      fpsHistory.forEach((fps, index) => {
-        const x = (index / (fpsHistory.length - 1)) * width;
-        const y = height - ((fps - minFps) / fpsRange) * height;
-        
-        if (index === 0) {
-          ctx.moveTo(x, y);
-        } else {
-          ctx.lineTo(x, y);
-        }
-      });
-      
-      ctx.stroke();
-    }
-    
-    // Draw performance zones
-    ctx.fillStyle = 'rgba(0,255,0,0.1)';
-    ctx.fillRect(0, 0, width, height * 0.25); // 60+ FPS zone
-    
-    ctx.fillStyle = 'rgba(255,255,0,0.1)';
-    ctx.fillRect(0, height * 0.25, width, height * 0.5); // 30-60 FPS zone
-    
-    ctx.fillStyle = 'rgba(255,0,0,0.1)';
-    ctx.fillRect(0, height * 0.75, width, height * 0.25); // <30 FPS zone
+  function updateKeyboardControls(controlsDiv) {
+    // Controls don't need updating, they're static
+    // This function exists for compatibility with the animation loop
   }
 
   function getPerformanceSuggestions() {
@@ -1705,24 +1770,24 @@
         Math.max(multiplier * 0.9, 0.1) // Reduce by 10%, minimum 0.1
       );
       
-      if (frameCount % 60 === 0) {
-        console.log(`Performance low (${averageFps.toFixed(1)} FPS), reducing density multipliers`);
-      }
+      // if (frameCount % 60 === 0) {
+      //   console.log(`Performance low (${averageFps.toFixed(1)} FPS), reducing density multipliers`);
+      // }
     } else if (performanceRatio > 1.2) {
       // Performance is good, can increase density
       currentDensityMultipliers = currentDensityMultipliers.map((multiplier, index) => 
         Math.min(multiplier * 1.05, baseDensityMultipliers[index]) // Increase by 5%, max to base
       );
       
-      if (frameCount % 60 === 0) {
-        console.log(`Performance good (${averageFps.toFixed(1)} FPS), increasing density multipliers`);
-      }
+      // if (frameCount % 60 === 0) {
+      //   console.log(`Performance good (${averageFps.toFixed(1)} FPS), increasing density multipliers`);
+      // }
     }
     
     // Debug: Log current multipliers
-    if (frameCount % 120 === 0) {
-      console.log(`Density multipliers: [${currentDensityMultipliers.map(m => m.toFixed(2)).join(', ')}]`);
-    }
+    // if (frameCount % 120 === 0) {
+    //   console.log(`Density multipliers: [${currentDensityMultipliers.map(m => m.toFixed(2)).join(', ')}]`);
+    // }
   }
 
   function getDynamicDensityMultiplier(distToSphere) {
